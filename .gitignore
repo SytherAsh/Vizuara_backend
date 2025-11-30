@@ -1,0 +1,248 @@
+# ========================================
+# Python
+# ========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ========================================
+# Virtual Environments
+# ========================================
+fenv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# ========================================
+# Environment Variables
+# ========================================
+.env
+.env.local
+.env.*.local
+*.env
+
+# ========================================
+# Logs
+# ========================================
+*.log
+logs/
+*.log.*
+vidyai_flask.log
+
+# ========================================
+# IDE & Editor Files
+# ========================================
+# VSCode
+.vscode/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# ========================================
+# OS Files
+# ========================================
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.Spotlight-V100
+.Trashes
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# ========================================
+# Data & Temporary Files
+# ========================================
+# Ignore all contents in data subdirectories
+data/temp/**
+data/test_output/**
+data/videos/**
+
+# Ignore media files in data directory
+data/**/*.mp4
+data/**/*.avi
+data/**/*.mov
+data/**/*.mkv
+data/**/*.mp3
+data/**/*.wav
+data/**/*.m4a
+data/**/*.aac
+data/**/*.jpg
+data/**/*.jpeg
+data/**/*.png
+data/**/*.gif
+data/**/*.bmp
+data/**/*.webp
+data/**/*.tiff
+
+# Keep directory structure (optional - uncomment if needed)
+# !data/.gitkeep
+# !data/temp/.gitkeep
+# !data/test_output/.gitkeep
+# !data/videos/.gitkeep
+
+# ========================================
+# Testing
+# ========================================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+*.cover
+.hypothesis/
+.pytest_cache/
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# ========================================
+# Jupyter Notebooks
+# ========================================
+.ipynb_checkpoints
+*.ipynb_checkpoints
+
+# ========================================
+# Database
+# ========================================
+*.db
+*.sqlite
+*.sqlite3
+
+# ========================================
+# Flask
+# ========================================
+instance/
+.webassets-cache
+
+# ========================================
+# MyPy
+# ========================================
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# ========================================
+# Pyre type checker
+# ========================================
+.pyre/
+
+# ========================================
+# pytype static type analyzer
+# ========================================
+.pytype/
+
+# ========================================
+# Celery
+# ========================================
+celerybeat-schedule
+celerybeat.pid
+
+# ========================================
+# SageMath parsed files
+# ========================================
+*.sage.py
+
+# ========================================
+# Spyder project settings
+# ========================================
+.spyderproject
+.spyproject
+
+# ========================================
+# Rope project settings
+# ========================================
+.ropeproject
+
+# ========================================
+# mkdocs documentation
+# ========================================
+/site
+
+# ========================================
+# Backup files
+# ========================================
+*.bak
+*.backup
+*.old
+*.orig
+*.tmp
+
+# ========================================
+# Archive files
+# ========================================
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+

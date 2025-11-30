@@ -1,0 +1,225 @@
+"""
+Story API Routes
+Endpoints for storyline and scene prompt generation
+"""
+
+import os
+import logging
+from flask import Blueprint, request, jsonify
+from services.story_service import StoryService
+
+logger = logging.getLogger("VidyAI_Flask")
+
+story_bp = Blueprint('story', __name__)
+
+
+def get_story_service():
+    """Get or create story service instance with API key"""
+    api_key = os.getenv('GROQ_API_KEY')
+    if not api_key:
+        raise ValueError('GROQ_API_KEY not found in environment variables')
+    return StoryService(api_key)
+
+
+@story_bp.route('/generate-storyline', methods=['POST'])
+def generate_storyline():
+    """
+    Generate comic storyline from Wikipedia content
+    
+    Request JSON:
+        {
+            "title": str,
+            "content": str,
+            "target_length": str (optional, default: "medium", choices: "short", "medium", "long"),
+            "max_chars": int (optional, default: 25000)
+        }
+    
+    Response JSON:
+        {
+            "success": bool,
+            "storyline": str or null,
+            "error": str (if failed)
+        }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'title' not in data or 'content' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'Title and content are required'
+            }), 400
+        
+        title = data['title']
+        content = data['content']
+        target_length = data.get('target_length', 'medium')
+        max_chars = data.get('max_chars', 25000)
+        
+        # Get story service
+        story_service = get_story_service()
+        
+        # Generate storyline
+        storyline = story_service.generate_comic_storyline(
+            title, content, target_length, max_chars
+        )
+        
+        return jsonify({
+            'success': True,
+            'storyline': storyline
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error in generate_storyline: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@story_bp.route('/generate-scenes', methods=['POST'])
+def generate_scenes():
+    """
+    Generate scene prompts from storyline
+    
+    Request JSON:
+        {
+            "title": str,
+            "storyline": str,
+            "comic_style": str (default: "western comic"),
+            "num_scenes": int (optional, default: 10),
+            "age_group": str (optional, default: "general"),
+            "education_level": str (optional, default: "standard"),
+            "negative_concepts": list[str] (optional),
+            "character_sheet": str (optional),
+            "style_sheet": str (optional)
+        }
+    
+    Response JSON:
+        {
+            "success": bool,
+            "scene_prompts": list[str] or null,
+            "count": int,
+            "error": str (if failed)
+        }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'title' not in data or 'storyline' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'Title and storyline are required'
+            }), 400
+        
+        title = data['title']
+        storyline = data['storyline']
+        comic_style = data.get('comic_style', 'western comic')
+        num_scenes = data.get('num_scenes', 10)
+        age_group = data.get('age_group', 'general')
+        education_level = data.get('education_level', 'standard')
+        negative_concepts = data.get('negative_concepts', ['text', 'letters', 'watermark', 'logo', 'caption', 'speech bubble', 'ui'])
+        character_sheet = data.get('character_sheet', '')
+        style_sheet = data.get('style_sheet', '')
+        
+        # Get story service
+        story_service = get_story_service()
+        
+        # Generate scene prompts
+        scene_prompts = story_service.generate_scene_prompts(
+            title, storyline, comic_style, num_scenes,
+            age_group, education_level, negative_concepts,
+            character_sheet, style_sheet
+        )
+        
+        return jsonify({
+            'success': True,
+            'scene_prompts': scene_prompts,
+            'count': len(scene_prompts)
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error in generate_scenes: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@story_bp.route('/generate-complete', methods=['POST'])
+def generate_complete():
+    """
+    Generate complete story (storyline + scene prompts)
+    
+    Request JSON:
+        {
+            "title": str,
+            "content": str,
+            "target_length": str (optional),
+            "max_chars": int (optional),
+            "comic_style": str (optional),
+            "num_scenes": int (optional),
+            "age_group": str (optional),
+            "education_level": str (optional),
+            "negative_concepts": list[str] (optional),
+            "character_sheet": str (optional),
+            "style_sheet": str (optional)
+        }
+    
+    Response JSON:
+        {
+            "success": bool,
+            "storyline": str or null,
+            "scene_prompts": list[str] or null,
+            "error": str (if failed)
+        }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'title' not in data or 'content' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'Title and content are required'
+            }), 400
+        
+        title = data['title']
+        content = data['content']
+        target_length = data.get('target_length', 'medium')
+        max_chars = data.get('max_chars', 25000)
+        comic_style = data.get('comic_style', 'western comic')
+        num_scenes = data.get('num_scenes', 10)
+        age_group = data.get('age_group', 'general')
+        education_level = data.get('education_level', 'standard')
+        negative_concepts = data.get('negative_concepts', ['text', 'letters', 'watermark', 'logo', 'caption', 'speech bubble', 'ui'])
+        character_sheet = data.get('character_sheet', '')
+        style_sheet = data.get('style_sheet', '')
+        
+        # Get story service
+        story_service = get_story_service()
+        
+        # Generate storyline
+        storyline = story_service.generate_comic_storyline(
+            title, content, target_length, max_chars
+        )
+        
+        # Generate scene prompts
+        scene_prompts = story_service.generate_scene_prompts(
+            title, storyline, comic_style, num_scenes,
+            age_group, education_level, negative_concepts,
+            character_sheet, style_sheet
+        )
+        
+        return jsonify({
+            'success': True,
+            'storyline': storyline,
+            'scene_prompts': scene_prompts,
+            'num_scenes': len(scene_prompts)
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error in generate_complete: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
