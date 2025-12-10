@@ -101,7 +101,15 @@ def generate_all():
             "scene_prompts": list[str],
             "storyline": str (optional),
             "narration_style": str (optional, default: "dramatic"),
-            "voice_tone": str (optional, default: "engaging")
+            "voice_tone": str (optional, default: "engaging"),
+            "narration_length": str (optional, default: "medium", choices: "short", "medium", "long"),
+            "target_duration": int (optional, default: 20),
+            "min_words": int (optional, default: 40),
+            "max_words": int (optional, default: 70),
+            "emotion_level": str (optional, default: "moderate", choices: "subtle", "moderate", "expressive"),
+            "pace_variation": str (optional, default: "varied", choices: "consistent", "varied", "dynamic"),
+            "pause_style": str (optional, default: "natural", choices: "minimal", "natural", "dramatic"),
+            "pronunciation_style": str (optional, default: "clear", choices: "standard", "clear", "precise")
         }
     
     Response JSON:
@@ -126,14 +134,33 @@ def generate_all():
         storyline = data.get('storyline', '')
         narration_style = data.get('narration_style', 'dramatic')
         voice_tone = data.get('voice_tone', 'engaging')
+        narration_length = data.get('narration_length', 'medium')
+        target_duration = data.get('target_duration', 20)
+        min_words = data.get('min_words', 40)
+        max_words = data.get('max_words', 70)
+        emotion_level = data.get('emotion_level', 'moderate')
+        pace_variation = data.get('pace_variation', 'varied')
+        pause_style = data.get('pause_style', 'natural')
+        pronunciation_style = data.get('pronunciation_style', 'clear')
         
         # Get narration service
         narration_service = get_narration_service()
         
-        # Generate all narrations
+        # Generate all narrations with all customization options
         result = narration_service.generate_all_scene_narrations(
-            title, scene_prompts, storyline,
-            narration_style, voice_tone
+            title=title,
+            scene_prompts=scene_prompts,
+            storyline=storyline,
+            narration_style=narration_style,
+            voice_tone=voice_tone,
+            narration_length=narration_length,
+            target_duration=target_duration,
+            min_words=min_words,
+            max_words=max_words,
+            emotion_level=emotion_level,
+            pace_variation=pace_variation,
+            pause_style=pause_style,
+            pronunciation_style=pronunciation_style
         )
         
         return jsonify({

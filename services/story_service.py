@@ -29,29 +29,96 @@ class StoryService:
         sanitized = re.sub(r'[\\/*?:"<>|]', '_', filename)
         return sanitized[:200]
     
-    def generate_comic_storyline(self, title: str, content: str, target_length: str = "medium", max_chars: int = 25000) -> str:
+    def generate_comic_storyline(
+        self, 
+        title: str, 
+        content: str, 
+        target_length: str = "medium", 
+        max_chars: int = 25000,
+        tone: str = "casual",
+        target_audience: str = "general",
+        complexity: str = "moderate",
+        focus_style: str = "comprehensive",
+        scene_count: int = None,
+        educational_level: str = "intermediate",
+        visual_style: str = "educational"
+    ) -> str:
         """
         Generate a comic storyline from Wikipedia content
         
         Args:
             title: Title of the Wikipedia article
             content: Content of the Wikipedia article
-            target_length: Desired length (short, medium, long)
+            target_length: Desired length (very short, short, medium, long)
             max_chars: Maximum characters to process
+            tone: Story tone (casual, formal, enthusiastic, professional, conversational)
+            target_audience: Target audience (kids, students, general, professionals)
+            complexity: Content complexity (simple, moderate, detailed)
+            focus_style: Focus style (key-points, comprehensive, highlights)
+            scene_count: Preferred number of scenes (optional)
+            educational_level: Educational level (beginner, intermediate, advanced)
+            visual_style: Visual style (educational, entertaining, documentary, animated)
             
         Returns:
             Generated comic storyline
         """
-        logger.info(f"Generating comic storyline for: {title} with target length: {target_length}")
+        logger.info(f"Generating comic storyline for: {title} with target length: {target_length}, tone: {tone}, audience: {target_audience}")
         
         # Map target length to word count
         length_map = {
+            "very short": 300,
             "short": 500,
             "medium": 1000,
             "long": 2000
         }
         
         word_count = length_map.get(target_length, 1000)
+        
+        # Map tone to writing style guidance
+        tone_guidance = {
+            "casual": "Use friendly, conversational language. Write like you're talking to a friend. Use contractions and everyday expressions.",
+            "formal": "Use professional, academic language. Maintain a scholarly tone with precise vocabulary and structured sentences.",
+            "enthusiastic": "Use energetic, exciting language. Include exclamations and vivid descriptions. Make it feel dynamic and engaging.",
+            "professional": "Use polished, business-appropriate language. Balance clarity with sophistication. Maintain credibility and authority.",
+            "conversational": "Use natural, flowing language. Write as if speaking directly to the reader. Include rhetorical questions and engaging transitions."
+        }
+        
+        # Map target audience to language complexity
+        audience_guidance = {
+            "kids": "Use VERY SIMPLE words that children ages 5-12 can understand. Short sentences (5-10 words). Use examples from their world. Avoid abstract concepts.",
+            "students": "Use clear, accessible language for ages 13-18. Moderate sentence length. Include relatable examples. Balance simplicity with educational value.",
+            "general": "Use accessible language for broad audiences. Clear explanations without being condescending. Balance simplicity with depth.",
+            "professionals": "Use sophisticated vocabulary appropriate for educated adults. Can include technical terms with context. More nuanced and detailed."
+        }
+        
+        # Map complexity to detail level
+        complexity_guidance = {
+            "simple": "Focus on core concepts only. Use straightforward explanations. Avoid technical details or complex relationships. Keep it easy to follow.",
+            "moderate": "Include balanced detail. Explain key concepts with some depth. Include important context but avoid overwhelming detail.",
+            "detailed": "Include comprehensive information. Provide thorough explanations, context, and relationships. Cover nuances and important details."
+        }
+        
+        # Map focus style to content approach
+        focus_guidance = {
+            "key-points": "Focus ONLY on the most important points and main events. Skip less critical details. Create a streamlined narrative highlighting essentials.",
+            "comprehensive": "Cover the complete story with thorough detail. Include all important aspects, context, and relationships. Provide full narrative coverage.",
+            "highlights": "Focus on the most exciting and memorable moments. Emphasize dramatic events and key turning points. Create an engaging highlight reel."
+        }
+        
+        # Map educational level to depth
+        education_guidance = {
+            "beginner": "Use foundational concepts and basic explanations. Build from the ground up. Assume no prior knowledge. Use analogies and simple examples.",
+            "intermediate": "Use moderate depth with some assumed background knowledge. Include important context. Balance accessibility with educational value.",
+            "advanced": "Use sophisticated concepts and deeper analysis. Can assume some background knowledge. Include nuanced details and complex relationships."
+        }
+        
+        # Map visual style to narrative approach
+        visual_style_guidance = {
+            "educational": "Emphasize clarity and learning. Focus on informative content. Use clear explanations and educational structure. Prioritize understanding.",
+            "entertaining": "Emphasize engagement and fun. Use exciting language and dramatic moments. Make it enjoyable while still informative. Prioritize engagement.",
+            "documentary": "Emphasize factual accuracy and real-world context. Use objective, informative tone. Include historical/social context. Prioritize authenticity.",
+            "animated": "Emphasize visual appeal and dynamic storytelling. Use vivid descriptions and energetic language. Make it visually exciting. Prioritize visual impact."
+        }
         
         # Truncate content if necessary
         if len(content) > max_chars:
@@ -64,20 +131,31 @@ class StoryService:
                 content = truncated + "...[Content truncated to fit token limits]"
             logger.info(f"Truncated content to {len(content)} chars")
         
+        # Build customization guidance text
+        scene_count_note = f" (Target: {scene_count} scenes)" if scene_count else ""
+        
         # Create prompt for LLM
         prompt = f"""
-        You are creating a detailed, engaging comic book storyline for "{title}" strictly from the provided Wikipedia content. This storyline will be read by STUDENTS, so use SIMPLE, CLEAR language that everyone can understand. Make it exciting and easy to follow!
+        You are creating a detailed, engaging comic book storyline for "{title}" strictly from the provided Wikipedia content.
+        
+        CUSTOMIZATION PARAMETERS (FOLLOW THESE EXACTLY):
+        - Target Audience: {target_audience.upper()} - {audience_guidance.get(target_audience, "Use appropriate language for the target audience.")}
+        - Tone: {tone.upper()} - {tone_guidance.get(tone, "Use appropriate tone for the story.")}
+        - Complexity Level: {complexity.upper()} - {complexity_guidance.get(complexity, "Use appropriate complexity level.")}
+        - Focus Style: {focus_style.upper()} - {focus_guidance.get(focus_style, "Use appropriate focus approach.")}
+        - Educational Level: {educational_level.upper()} - {education_guidance.get(educational_level, "Use appropriate educational depth.")}
+        - Visual Style: {visual_style.upper()} - {visual_style_guidance.get(visual_style, "Use appropriate visual narrative approach.")}
+        - Target Length: ~{word_count} words (±100 words){scene_count_note} - prioritize completeness over strict word count
         
         HARD REQUIREMENTS:
-        - Target length: ~{word_count} words (±100 words) - prioritize completeness over strict word count
         - 5 acts with clear narrative progression and smooth transitions
         - Chronologically accurate with clear timeline markers
         - Historically/factually accurate; no invented facts or fabricated details
         - Use ONLY details present in the provided source content
         - If any detail is uncertain or missing in the source, omit it rather than inventing
         - Cover the COMPLETE story arc from beginning to end with no gaps
-        - USE SIMPLE WORDS - avoid complex vocabulary, write like you're explaining to a friend
-        - BE ENGAGING - make it exciting, use active voice, keep students interested
+        - Follow the TONE, AUDIENCE, COMPLEXITY, FOCUS, EDUCATION LEVEL, and VISUAL STYLE parameters above
+        - BE ENGAGING - make it exciting, use active voice, keep readers interested
         
         FORMAT (FOLLOW EXACTLY):
         # {title}: Comprehensive Comic Storyline
@@ -153,20 +231,22 @@ class StoryService:
         ## Timeline & Chronology
         [Create a clear chronological sequence of 8-12 major events with approximate dates/time periods where available. This ensures the story flows in proper order.]
         
-        WRITING GUIDELINES FOR STUDENTS:
-        - Write in SIMPLE, CLEAR language that students can easily understand
-        - Avoid complex words - use everyday language (e.g., "brave" not "valorous", "happy" not "jubilant")
-        - Use SHORT sentences that are easy to follow
-        - Make it EXCITING - use active voice and vivid descriptions
+        WRITING GUIDELINES (FOLLOW CUSTOMIZATION PARAMETERS):
+        - TONE: {tone_guidance.get(tone, "Use appropriate tone")}
+        - AUDIENCE: {audience_guidance.get(target_audience, "Use appropriate language")}
+        - COMPLEXITY: {complexity_guidance.get(complexity, "Use appropriate detail level")}
+        - FOCUS: {focus_guidance.get(focus_style, "Use appropriate focus approach")}
+        - EDUCATION: {education_guidance.get(educational_level, "Use appropriate educational depth")}
+        - VISUAL STYLE: {visual_style_guidance.get(visual_style, "Use appropriate visual narrative")}
         - Use specific names, dates, locations, and facts from the source
         - Build clear cause-and-effect relationships between events
         - Show character growth and change over time
         - Create emotional connection while maintaining accuracy
         - Ensure smooth transitions between acts with connecting phrases
         - Make the chronology crystal clear - use time markers like "First...", "Then...", "After that..."
-        - Leave no important story elements uncovered
+        - Leave no important story elements uncovered (unless focus_style is "key-points" or "highlights")
         - Balance engaging storytelling with factual accuracy
-        - Think: "Would a 12-year-old understand this?" If not, simplify it!
+        - Adapt language complexity based on target_audience and educational_level
         
         SOURCE MATERIAL (your only source - use all relevant details):
         {content}
@@ -175,9 +255,21 @@ class StoryService:
         """
         
         try:
+            # Create dynamic system message based on customization
+            system_message = f"""You are an expert storyteller who creates engaging comic book storylines. 
+            You adapt your writing style based on customization parameters:
+            - Target Audience: {target_audience} - {audience_guidance.get(target_audience, "Use appropriate language")}
+            - Tone: {tone} - {tone_guidance.get(tone, "Use appropriate tone")}
+            - Complexity: {complexity} - {complexity_guidance.get(complexity, "Use appropriate detail")}
+            - Educational Level: {educational_level} - {education_guidance.get(educational_level, "Use appropriate depth")}
+            - Visual Style: {visual_style} - {visual_style_guidance.get(visual_style, "Use appropriate approach")}
+            
+            Your storylines are historically accurate but written in an engaging way that matches the specified parameters. 
+            You always follow the customization settings provided and adapt your language, depth, and style accordingly."""
+            
             response = self.client.chat.completions.create(
                 messages=[
-                    {"role": "system", "content": "You are an expert storyteller who creates engaging, easy-to-understand comic book storylines for STUDENTS. You write in SIMPLE, CLEAR language that anyone can understand - avoiding complex vocabulary and using everyday words. You make history and facts exciting by telling stories in an engaging, active way. Your storylines are accurate but written like you're telling an exciting story to a friend, not writing a textbook. You use short sentences, simple words, and always think: 'Would a student understand this?'"},
+                    {"role": "system", "content": system_message},
                     {"role": "user", "content": prompt}
                 ],
                 model="llama-3.3-70b-versatile",
@@ -201,10 +293,14 @@ class StoryService:
         comic_style: str,
         num_scenes: int = 10,
         age_group: str = "general",
-        education_level: str = "standard",
+        education_level: str = "intermediate",
         negative_concepts: List[str] = None,
         character_sheet: str = "",
-        style_sheet: str = ""
+        style_sheet: str = "",
+        visual_detail: str = "moderate",
+        camera_style: str = "varied",
+        color_palette: str = "natural",
+        scene_pacing: str = "moderate"
     ) -> List[str]:
         """
         Generate scene prompts for comic panels
@@ -246,10 +342,40 @@ class StoryService:
         
         # Education guidance
         education_guidance = {
-            "basic": "Use simple vocabulary, clear explanations, and focus on foundational concepts. Break down complex ideas into easily digestible components with examples.",
-            "standard": "Use moderate vocabulary and present concepts with appropriate depth for general understanding. Balance educational content with narrative engagement.",
+            "beginner": "Use simple vocabulary, clear explanations, and focus on foundational concepts. Break down complex ideas into easily digestible components with examples.",
+            "intermediate": "Use moderate vocabulary and present concepts with appropriate depth for general understanding. Balance educational content with narrative engagement.",
             "advanced": "Use field-specific terminology where appropriate and explore concepts in depth. Present nuanced details and sophisticated analysis of the subject matter."
         }.get(education_level.lower(), "Present educational content with balanced complexity suitable for interested general readers.")
+        
+        # Visual detail guidance
+        visual_detail_guidance = {
+            "minimal": "Use simple, clean visual descriptions. Focus on essential elements only. Avoid excessive detail. Keep descriptions concise and straightforward.",
+            "moderate": "Use balanced visual descriptions with appropriate detail. Include important elements and context without overwhelming. Maintain clarity while providing sufficient information.",
+            "detailed": "Use rich, comprehensive visual descriptions. Include extensive detail about settings, characters, lighting, composition, and atmosphere. Paint a vivid, complete picture."
+        }.get(visual_detail.lower(), "Use balanced visual descriptions with appropriate detail.")
+        
+        # Camera style guidance
+        camera_style_guidance = {
+            "dynamic": "Use dynamic camera angles: low angles for power, high angles for vulnerability, Dutch angles for tension, close-ups for emotion, wide shots for context. Emphasize action and movement.",
+            "cinematic": "Use cinematic camera work: dramatic framing, depth of field, rule of thirds, leading lines. Create movie-like compositions with professional cinematography techniques.",
+            "traditional": "Use classic comic panel compositions: straightforward angles, clear staging, traditional layouts. Focus on clarity and readability with standard comic conventions.",
+            "varied": "Mix camera angles and compositions throughout scenes. Vary between close-ups, medium shots, wide shots, and different angles to create visual interest and narrative flow."
+        }.get(camera_style.lower(), "Use varied camera angles and compositions.")
+        
+        # Color palette guidance
+        color_palette_guidance = {
+            "vibrant": "Use bold, saturated colors with high contrast. Employ bright primaries and vivid hues. Create energetic, eye-catching visuals with strong color impact.",
+            "muted": "Use soft, desaturated colors with subtle contrast. Employ pastels and earth tones. Create gentle, calming visuals with refined color harmony.",
+            "monochrome": "Use black and white or grayscale only. Focus on contrast, shadows, and lighting. Create dramatic, timeless visuals with strong value relationships.",
+            "natural": "Use realistic, natural colors matching real-world appearances. Employ authentic color palettes based on actual settings and lighting conditions."
+        }.get(color_palette.lower(), "Use natural, realistic colors.")
+        
+        # Scene pacing guidance
+        scene_pacing_guidance = {
+            "fast": "Create quick, energetic scene transitions. Focus on key moments and action. Use shorter, more dynamic scene descriptions. Emphasize movement and progression.",
+            "moderate": "Create balanced scene pacing with appropriate transitions. Balance action with moments of reflection. Use varied scene lengths and pacing.",
+            "slow": "Create deliberate, detailed scene pacing. Allow time for important moments to breathe. Use longer, more contemplative scene descriptions. Emphasize atmosphere and detail."
+        }.get(scene_pacing.lower(), "Create balanced scene pacing.")
         
         # Prepare negative concepts text
         negatives_text = ""
@@ -269,36 +395,46 @@ class StoryService:
         CORE REQUIREMENTS FOR EVERY SCENE:
         1. Tell the story in ORDER - each scene follows the previous one naturally
         2. Visual description ONLY (NO text, captions, speech bubbles, or words on images)
-        3. Use 80-120 SIMPLE, CLEAR words describing: what we see, who is there, what they're doing, how they look, the mood
+        3. Word count: {"40-60 words" if visual_detail == "minimal" else "80-120 words" if visual_detail == "moderate" else "120-180 words"} describing: what we see, who is there, what they're doing, how they look, the mood, lighting, colors, composition
         4. Keep characters and places looking the same across all scenes
-        5. Follow the {comic_style} comic style
+        5. Follow the {comic_style} comic style with {visual_detail} visual detail
         6. Only use facts from the storyline - don't make up new things
         7. Absolutely NO text, letters, logos, watermarks, or words in images
-        8. Each scene must move the story forward and connect to the next scene
+        8. Each scene must move the story forward and connect to the next scene with {scene_pacing} pacing
         9. Use SIMPLE words students can understand - avoid complex vocabulary
+        10. Apply {color_palette} color palette and {camera_style} camera style consistently
 
-        SCENE DISTRIBUTION STRATEGY:
+        SCENE DISTRIBUTION STRATEGY ({scene_pacing.upper()} PACING):
+        - Follow {scene_pacing_guidance} for scene transitions and pacing
         - Scenes 1-2: Opening/Setup (introduce setting, main characters, initial situation)
         - Scenes 3-4: Early Development (first challenges, rising action begins)
         - Scenes 5-6: Mid-Story Turning Points (escalating conflict, crucial developments)
         - Scenes 7-8: Climax & Resolution (peak drama, major events, decisive moments)
         - Scenes 9-{num_scenes}: Aftermath & Legacy (resolution, lasting impact, conclusion)
         
-        Ensure complete story coverage from first moment to final impact.
+        Ensure complete story coverage from first moment to final impact with {scene_pacing} pacing.
 
-        HOW TO MAKE SCENES ENGAGING:
-        - Make each scene unique and exciting - something students will remember
+        HOW TO MAKE SCENES ENGAGING ({visual_detail.upper()} DETAIL, {camera_style.upper()} CAMERA, {color_palette.upper()} COLORS):
+        - Visual Detail: {visual_detail_guidance}
+        - Camera Work: {camera_style_guidance}
+        - Color Approach: {color_palette_guidance}
+        - Make each scene unique and exciting - something memorable
         - Use camera angles to show emotion: close-ups for feelings, wide shots to show the big picture
         - Show what characters are feeling through their faces and body language
         - Include details that show where and when this is happening
         - Make sure scenes connect smoothly - if someone is running in one scene, show where they're going in the next
         - Focus on the most exciting or important moments
         - Use light and shadows to create mood (bright for happy, dark for scary/serious)
+        - Apply {color_palette} color palette consistently throughout all scenes
 
-        STYLE PARAMETERS:
+        STYLE PARAMETERS (FOLLOW THESE EXACTLY):
         - Comic Style: {comic_style} — {style_guidance}
         - Age Group: {age_group} — {age_guidance}
         - Education Level: {education_level} — {education_guidance}
+        - Visual Detail: {visual_detail.upper()} — {visual_detail_guidance}
+        - Camera Style: {camera_style.upper()} — {camera_style_guidance}
+        - Color Palette: {color_palette.upper()} — {color_palette_guidance}
+        - Scene Pacing: {scene_pacing.upper()} — {scene_pacing_guidance}
         {negatives_text}
         {sheets_text}
 

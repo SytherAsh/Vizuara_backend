@@ -98,10 +98,36 @@ class ImageService:
         style_sheet: str = "",
         character_sheet: str = "",
         negative_concepts: Optional[List[str]] = None,
-        aspect_ratio: str = "16:9"
+        aspect_ratio: str = "16:9",
+        image_quality: str = "high",
+        lighting_style: str = "natural",
+        color_temperature: str = "neutral"
     ) -> str:
         """Enhance prompt for Gemini"""
         visual_description, style_info = self._clean_scene_prompt(scene_prompt)
+        
+        # Map quality to resolution/quality guidance
+        quality_guidance = {
+            "standard": "Standard quality with balanced detail",
+            "high": "High quality with enhanced detail and sharpness",
+            "ultra": "Ultra high quality with maximum detail, sharpness, and clarity"
+        }.get(image_quality.lower(), "High quality")
+        
+        # Map lighting style to guidance
+        lighting_guidance = {
+            "natural": "Natural, realistic lighting that matches real-world conditions",
+            "dramatic": "Dramatic lighting with high contrast, strong shadows, and cinematic effects",
+            "soft": "Soft, diffused lighting with gentle shadows and even illumination",
+            "cinematic": "Cinematic lighting with professional cinematography techniques, depth, and mood"
+        }.get(lighting_style.lower(), "Natural lighting")
+        
+        # Map color temperature to guidance
+        color_guidance = {
+            "warm": "Warm color temperature with golden, amber, and orange tones creating a cozy atmosphere",
+            "cool": "Cool color temperature with blue, cyan, and cool tones creating a crisp, fresh atmosphere",
+            "neutral": "Neutral color temperature with balanced, natural colors",
+            "vibrant": "Vibrant, saturated colors with bold, eye-catching hues and strong color impact"
+        }.get(color_temperature.lower(), "Neutral color temperature")
         
         parts = [
             f"Create a single comic book panel with this exact visual content:\n{visual_description}"
@@ -116,17 +142,19 @@ class ImageService:
         
         parts.append(f"""
 Technical requirements:
-- Aspect ratio: {aspect_ratio} (landscape)
+- Aspect ratio: {aspect_ratio}
+- Image Quality: {quality_guidance}
+- Lighting: {lighting_guidance}
+- Color Temperature: {color_guidance}
 - High quality comic book art
-- Cinematic lighting, balanced framing
-- Vibrant but not oversaturated colors
+- Balanced framing and composition
 - NO text, captions, or speech bubbles
 - NO watermarks, logos, or UI elements
 - Character consistency across panels
         """)
         
         if negative_concepts:
-            parts.append(f"\nAvoid: {', '.join(negative_concepts)}")
+            parts.append(f"\nStrictly avoid: {', '.join(negative_concepts)}")
         
         parts.append("""
 Quality standards:
@@ -134,6 +162,7 @@ Quality standards:
 - Clear expressions and clean background
 - Consistent art style
 - Absolutely NO text or writing
+- Follow the specified lighting and color temperature exactly
         """)
         
         return "\n".join(parts)
@@ -147,7 +176,10 @@ Quality standards:
         style_sheet: str = "",
         character_sheet: str = "",
         negative_concepts: Optional[List[str]] = None,
-        aspect_ratio: str = "16:9"
+        aspect_ratio: str = "16:9",
+        image_quality: str = "high",
+        lighting_style: str = "natural",
+        color_temperature: str = "neutral"
     ) -> Optional[bytes]:
         """
         Generate a single comic panel
@@ -161,6 +193,9 @@ Quality standards:
             character_sheet: Character consistency guide
             negative_concepts: Concepts to avoid
             aspect_ratio: Image aspect ratio
+            image_quality: Image quality level (standard, high, ultra)
+            lighting_style: Lighting style (natural, dramatic, soft, cinematic)
+            color_temperature: Color temperature (warm, cool, neutral, vibrant)
             
         Returns:
             Image data as bytes or None
@@ -175,7 +210,10 @@ Quality standards:
                 style_sheet,
                 character_sheet,
                 negative_concepts,
-                aspect_ratio
+                aspect_ratio,
+                image_quality,
+                lighting_style,
+                color_temperature
             )
             
             logger.info(f"Generating image for scene {scene_num} (Attempt {attempt})")
@@ -260,7 +298,10 @@ Quality standards:
         style_sheet: str = "",
         character_sheet: str = "",
         negative_concepts: Optional[List[str]] = None,
-        aspect_ratio: str = "16:9"
+        aspect_ratio: str = "16:9",
+        image_quality: str = "high",
+        lighting_style: str = "natural",
+        color_temperature: str = "neutral"
     ) -> List[Optional[bytes]]:
         """
         Generate all comic panels
@@ -272,11 +313,14 @@ Quality standards:
             character_sheet: Character consistency guide
             negative_concepts: Concepts to avoid
             aspect_ratio: Image aspect ratio
+            image_quality: Image quality level (standard, high, ultra)
+            lighting_style: Lighting style (natural, dramatic, soft, cinematic)
+            color_temperature: Color temperature (warm, cool, neutral, vibrant)
             
         Returns:
             List of image data (bytes) for each scene
         """
-        logger.info(f"Generating {len(scene_prompts)} scenes for {comic_title}")
+        logger.info(f"Generating {len(scene_prompts)} scenes for {comic_title} with quality={image_quality}, lighting={lighting_style}, colors={color_temperature}")
         
         if not self.client:
             logger.error("Gemini client not initialized.")
@@ -293,7 +337,10 @@ Quality standards:
                 style_sheet=style_sheet,
                 character_sheet=character_sheet,
                 negative_concepts=negative_concepts,
-                aspect_ratio=aspect_ratio
+                aspect_ratio=aspect_ratio,
+                image_quality=image_quality,
+                lighting_style=lighting_style,
+                color_temperature=color_temperature
             )
             
             images.append(image_data)

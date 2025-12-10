@@ -37,6 +37,9 @@ def build_video():
             "bg_music": str (optional, base64),
             "bg_music_volume": float (optional, default: 0.08),
             "ken_burns": bool (optional, default: true),
+            "kb_zoom_start": float (optional, default: 1.05),
+            "kb_zoom_end": float (optional, default: 1.15),
+            "kb_pan": str (optional, default: "auto", choices: "auto", "left", "right", "up", "down", "none"),
             "upload_to_supabase": bool (optional, default: false),
             "project_name": str (optional, for supabase path)
         }
@@ -85,6 +88,9 @@ def build_video():
         tail_pad = data.get('tail_pad', 0.15)
         bg_music_volume = data.get('bg_music_volume', 0.08)
         ken_burns = data.get('ken_burns', True)
+        kb_zoom_start = data.get('kb_zoom_start', 1.05)
+        kb_zoom_end = data.get('kb_zoom_end', 1.15)
+        kb_pan = data.get('kb_pan', 'auto')
         upload_to_supabase = data.get('upload_to_supabase', False)
         project_name = data.get('project_name', title.replace(' ', '_'))
         
@@ -93,7 +99,7 @@ def build_video():
         if 'bg_music' in data and data['bg_music']:
             bg_music_data = base64.b64decode(data['bg_music'])
         
-        # Build video
+        # Build video with all customization options
         video_data = video_service.build_video(
             images=images,
             scene_audio=scene_audio,
@@ -106,7 +112,10 @@ def build_video():
             tail_pad=tail_pad,
             bg_music_data=bg_music_data,
             bg_music_volume=bg_music_volume,
-            ken_burns=ken_burns
+            ken_burns=ken_burns,
+            kb_zoom_start=kb_zoom_start,
+            kb_zoom_end=kb_zoom_end,
+            kb_pan=kb_pan
         )
         
         # Convert to base64

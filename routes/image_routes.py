@@ -108,7 +108,10 @@ def generate_all():
             "style_sheet": str (optional),
             "character_sheet": str (optional),
             "negative_concepts": list[str] (optional),
-            "aspect_ratio": str (optional),
+            "aspect_ratio": str (optional, default: "16:9", choices: "16:9", "4:3", "1:1", "9:16", "21:9"),
+            "image_quality": str (optional, default: "high", choices: "standard", "high", "ultra"),
+            "lighting_style": str (optional, default: "natural", choices: "natural", "dramatic", "soft", "cinematic"),
+            "color_temperature": str (optional, default: "neutral", choices: "warm", "cool", "neutral", "vibrant"),
             "upload_to_supabase": bool (optional, default: false),
             "project_name": str (optional, for supabase path)
         }
@@ -135,21 +138,27 @@ def generate_all():
         title = data['title']
         style_sheet = data.get('style_sheet', '')
         character_sheet = data.get('character_sheet', '')
-        negative_concepts = data.get('negative_concepts', ['text', 'letters', 'watermark', 'logo'])
+        negative_concepts = data.get('negative_concepts', ['text', 'letters', 'watermark', 'logo', 'caption', 'speech bubble', 'ui'])
         aspect_ratio = data.get('aspect_ratio', '16:9')
+        image_quality = data.get('image_quality', 'high')
+        lighting_style = data.get('lighting_style', 'natural')
+        color_temperature = data.get('color_temperature', 'neutral')
         upload_to_supabase = data.get('upload_to_supabase', False)
         project_name = data.get('project_name', title.replace(' ', '_'))
         
         # Get image service
         image_service = get_image_service()
         
-        # Generate all images
+        # Generate all images with all customization options
         images = image_service.generate_comic_strip(
             scene_prompts, title,
             style_sheet=style_sheet,
             character_sheet=character_sheet,
             negative_concepts=negative_concepts,
-            aspect_ratio=aspect_ratio
+            aspect_ratio=aspect_ratio,
+            image_quality=image_quality,
+            lighting_style=lighting_style,
+            color_temperature=color_temperature
         )
         
         # Filter out None images

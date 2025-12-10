@@ -30,8 +30,15 @@ def generate_storyline():
         {
             "title": str,
             "content": str,
-            "target_length": str (optional, default: "medium", choices: "short", "medium", "long"),
-            "max_chars": int (optional, default: 25000)
+            "target_length": str (optional, default: "medium", choices: "very short", "short", "medium", "long"),
+            "max_chars": int (optional, default: 25000),
+            "tone": str (optional, default: "casual", choices: "casual", "formal", "enthusiastic", "professional", "conversational"),
+            "target_audience": str (optional, default: "general", choices: "kids", "students", "general", "professionals"),
+            "complexity": str (optional, default: "moderate", choices: "simple", "moderate", "detailed"),
+            "focus_style": str (optional, default: "comprehensive", choices: "key-points", "comprehensive", "highlights"),
+            "scene_count": int (optional),
+            "educational_level": str (optional, default: "intermediate", choices: "beginner", "intermediate", "advanced"),
+            "visual_style": str (optional, default: "educational", choices: "educational", "entertaining", "documentary", "animated")
         }
     
     Response JSON:
@@ -55,12 +62,31 @@ def generate_storyline():
         target_length = data.get('target_length', 'medium')
         max_chars = data.get('max_chars', 25000)
         
+        # Extract customization options
+        tone = data.get('tone', 'casual')
+        target_audience = data.get('target_audience', 'general')
+        complexity = data.get('complexity', 'moderate')
+        focus_style = data.get('focus_style', 'comprehensive')
+        scene_count = data.get('scene_count')
+        educational_level = data.get('educational_level', 'intermediate')
+        visual_style = data.get('visual_style', 'educational')
+        
         # Get story service
         story_service = get_story_service()
         
-        # Generate storyline
+        # Generate storyline with all customization options
         storyline = story_service.generate_comic_storyline(
-            title, content, target_length, max_chars
+            title=title,
+            content=content,
+            target_length=target_length,
+            max_chars=max_chars,
+            tone=tone,
+            target_audience=target_audience,
+            complexity=complexity,
+            focus_style=focus_style,
+            scene_count=scene_count,
+            educational_level=educational_level,
+            visual_style=visual_style
         )
         
         return jsonify({
@@ -88,7 +114,11 @@ def generate_scenes():
             "comic_style": str (default: "western comic"),
             "num_scenes": int (optional, default: 10),
             "age_group": str (optional, default: "general"),
-            "education_level": str (optional, default: "standard"),
+            "education_level": str (optional, default: "intermediate"),
+            "visual_detail": str (optional, default: "moderate", choices: "minimal", "moderate", "detailed"),
+            "camera_style": str (optional, default: "varied", choices: "dynamic", "cinematic", "traditional", "varied"),
+            "color_palette": str (optional, default: "natural", choices: "vibrant", "muted", "monochrome", "natural"),
+            "scene_pacing": str (optional, default: "moderate", choices: "fast", "moderate", "slow"),
             "negative_concepts": list[str] (optional),
             "character_sheet": str (optional),
             "style_sheet": str (optional)
@@ -116,7 +146,11 @@ def generate_scenes():
         comic_style = data.get('comic_style', 'western comic')
         num_scenes = data.get('num_scenes', 10)
         age_group = data.get('age_group', 'general')
-        education_level = data.get('education_level', 'standard')
+        education_level = data.get('education_level', 'intermediate')
+        visual_detail = data.get('visual_detail', 'moderate')
+        camera_style = data.get('camera_style', 'varied')
+        color_palette = data.get('color_palette', 'natural')
+        scene_pacing = data.get('scene_pacing', 'moderate')
         negative_concepts = data.get('negative_concepts', ['text', 'letters', 'watermark', 'logo', 'caption', 'speech bubble', 'ui'])
         character_sheet = data.get('character_sheet', '')
         style_sheet = data.get('style_sheet', '')
@@ -124,11 +158,21 @@ def generate_scenes():
         # Get story service
         story_service = get_story_service()
         
-        # Generate scene prompts
+        # Generate scene prompts with all customization options
         scene_prompts = story_service.generate_scene_prompts(
-            title, storyline, comic_style, num_scenes,
-            age_group, education_level, negative_concepts,
-            character_sheet, style_sheet
+            title=title,
+            storyline=storyline,
+            comic_style=comic_style,
+            num_scenes=num_scenes,
+            age_group=age_group,
+            education_level=education_level,
+            negative_concepts=negative_concepts,
+            character_sheet=character_sheet,
+            style_sheet=style_sheet,
+            visual_detail=visual_detail,
+            camera_style=camera_style,
+            color_palette=color_palette,
+            scene_pacing=scene_pacing
         )
         
         return jsonify({
