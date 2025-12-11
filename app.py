@@ -14,13 +14,23 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Configure logging (console-only for deployment; no local file writes)
+# Use WARNING level in production to reduce I/O overhead, INFO in development
+log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
+if log_level not in ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']:
+    log_level = 'INFO'
+
 logger = logging.getLogger("VidyAI_Flask")
-logger.setLevel(logging.INFO)
+logger.setLevel(getattr(logging, log_level))
 
 if not logger.handlers:
     console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    console_handler.setLevel(getattr(logging, log_level))
+    # Simplified formatter for production (less overhead)
+    if log_level == 'WARNING':
+        formatter = logging.Formatter('%(levelname)s - %(message)s')
+    else:
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
     logger.propagate = False
 
@@ -71,29 +81,24 @@ cors = CORS(app,
 )
 
 # Add request logging middleware AFTER CORS initialization
+# Only log errors and warnings in production to reduce I/O overhead
 @app.before_request
 def log_request_info():
     """Log incoming requests for debugging"""
-    logger.info(f"Request: {request.method} {request.path} from {request.remote_addr}")
-    # Log CORS headers for debugging
-    if request.method == 'OPTIONS':
-        logger.info(f"OPTIONS preflight request - Origin: {request.headers.get('Origin')}")
+    if log_level == 'DEBUG':
+        logger.debug(f"Request: {request.method} {request.path} from {request.remote_addr}")
+    # Only log OPTIONS in debug mode (too verbose otherwise)
+    if request.method == 'OPTIONS' and log_level == 'DEBUG':
+        logger.debug(f"OPTIONS preflight - Origin: {request.headers.get('Origin')}")
 
 @app.after_request
 def log_response_info(response):
     """Log response status for debugging - ensure CORS headers are present"""
-    logger.info(f"Response: {response.status_code} for {request.method} {request.path}")
-    # Log CORS headers for debugging
-    cors_headers = {
-        'Access-Control-Allow-Origin': response.headers.get('Access-Control-Allow-Origin'),
-        'Access-Control-Allow-Methods': response.headers.get('Access-Control-Allow-Methods'),
-        'Access-Control-Allow-Headers': response.headers.get('Access-Control-Allow-Headers'),
-        'Access-Control-Allow-Credentials': response.headers.get('Access-Control-Allow-Credentials'),
-    }
-    if request.method == 'OPTIONS':
-        logger.info(f"OPTIONS Response - Status: {response.status_code}, CORS headers: {cors_headers}")
-    elif any(cors_headers.values()):
-        logger.info(f"CORS headers present: {cors_headers}")
+    # Only log errors (4xx, 5xx) in production
+    if response.status_code >= 400:
+        logger.warning(f"Error {response.status_code} for {request.method} {request.path}")
+    elif log_level == 'DEBUG':
+        logger.debug(f"Response: {response.status_code} for {request.method} {request.path}")
     return response
 
 # Import and register blueprints

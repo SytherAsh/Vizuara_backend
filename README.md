@@ -117,7 +117,7 @@ The server will start at `http://localhost:5000`
 
 See [API_DOCUMENTATION.md](./API_DOCUMENTATION.md) for complete API reference.
 
-### Quick Example
+### Quick Examples
 
 #### Search Wikipedia:
 ```bash
@@ -136,6 +136,32 @@ curl -X POST http://localhost:5000/api/story/generate-complete \
     "num_scenes": 10
   }'
 ```
+
+#### Build Video with Subtitles:
+```bash
+curl -X POST http://localhost:5000/api/video/build \
+  -H "Content-Type: application/json" \
+  -d '{
+    "images": ["base64_image1", "base64_image2"],
+    "scene_audio": {
+      "scene_1": "base64_audio1",
+      "scene_2": "base64_audio2"
+    },
+    "title": "Albert Einstein",
+    "narrations": {
+      "scene_1": {"narration": "Text for scene 1"},
+      "scene_2": {"narration": "Text for scene 2"}
+    },
+    "generate_subtitles": true,
+    "upload_to_supabase": true
+  }'
+```
+
+**Response includes:**
+- `video`: Base64 encoded video file
+- `subtitles`: Base64 encoded SRT subtitle file (if generated)
+- `subtitles_url`: Public URL to subtitle file (if uploaded to Supabase)
+- `timings`: Scene timing information
 
 ## 🔧 Technologies Used
 
@@ -161,12 +187,14 @@ curl -X POST http://localhost:5000/api/story/generate-complete \
 - Direct URL access to files
 
 #### Bucket Map (per project/title_sanitized)
-- `images/{title_sanitized}/scene_{i}.jpg`
-- `audio/{title_sanitized}/scene_{i}.mp3`
-- `text/{title_sanitized}/scene_{i}_narration.txt`
-- `video/{title_sanitized}/{title_sanitized}.mp4`
-- `video/{title_sanitized}/{title_sanitized}.srt`
-- `metadata/{title_sanitized}/metadata.json`
+- `images/{title_sanitized}/scene_{i}.jpg` - Generated comic panel images
+- `audio/{title_sanitized}/scene_{i}.mp3` - Text-to-speech audio for each scene
+- `text/{title_sanitized}/scene_{i}_narration.txt` - Narration text for each scene
+- `text/{title_sanitized}/storyline.txt` - Complete storyline text
+- `text/{title_sanitized}/scene_prompts.txt` - Scene generation prompts
+- `video/{title_sanitized}/{title_sanitized}.mp4` - Final compiled video
+- `video/{title_sanitized}/{title_sanitized}.srt` - Subtitle file (SRT format)
+- `metadata/{title_sanitized}/metadata.json` - Project metadata
 
 ### ✅ AI-Powered Generation
 - Groq API for storyline and narration (Llama 3.3 70B)
@@ -184,6 +212,21 @@ curl -X POST http://localhost:5000/api/story/generate-complete \
 - Ken Burns effect support
 - Audio synchronization
 - Crossfade transitions
+- Subtitle generation (SRT format)
+
+### ✅ Subtitle Support
+- Automatic SRT subtitle generation from narrations
+- Accurate timing synchronization with audio
+- Text cleaning and formatting (removes markdown)
+- Smart text wrapping (max 3 lines per subtitle)
+- Styled subtitles (white text, black outline, Arial font)
+- External SRT file generation (compatible with VLC, web players)
+- Upload to Supabase alongside video files
+
+**Note**: Subtitles are currently generated as external `.srt` files. They are NOT burned into the video file itself. This means:
+- ✅ Works with players that support external SRT files (VLC, some web players)
+- ⚠️ May not work with basic players or social media platforms
+- ✅ Subtitles can be toggled on/off in supporting players
 
 ## 🔐 Security Notes
 
@@ -215,6 +258,12 @@ tail -f vidyai_flask.log
 **Issue:** `CORS errors from React`
 - **Solution:** Add your React URL to CORS_ORIGINS in `.env`
 
+**Issue:** `Subtitles not showing in video player`
+- **Solution:** Subtitles are external SRT files. Ensure your player supports external subtitle files. Use VLC or a web player with subtitle support. The SRT file must be in the same directory as the video or loaded separately.
+
+**Issue:** `Subtitles timing is off`
+- **Solution:** Check that narrations match the audio content. Subtitle timing is calculated from scene durations which are based on audio length.
+
 ## 📊 API Endpoints Summary
 
 | Endpoint | Method | Description |
@@ -231,7 +280,10 @@ tail -f vidyai_flask.log
 | `/api/narration/generate-all` | POST | Generate all narrations |
 | `/api/audio/generate-scene` | POST | Generate scene audio |
 | `/api/audio/generate-all` | POST | Generate all audio |
-| `/api/video/build` | POST | Build final video |
+| `/api/video/build` | POST | Build final video (with optional subtitles) |
+| `/api/video/build-from-supabase` | POST | Build video from Supabase assets |
+| `/api/video/subtitles-url` | POST | Get public URL for subtitles SRT file |
+| `/api/video/subtitles/download` | POST | Download subtitles SRT file |
 | `/api/storage/upload` | POST | Upload file to Supabase |
 | `/api/storage/download` | POST | Download file from Supabase |
 | `/api/storage/delete` | POST | Delete file from Supabase |
@@ -248,7 +300,12 @@ tail -f vidyai_flask.log
 5. **Generate Narrations** → Create narration text for each scene
 6. **Generate Audio** → Convert narrations to speech (MP3)
 7. **Build Video** → Compile images + audio into final video
+   - Optionally generate subtitles (SRT format)
+   - Subtitles are created from narration texts with accurate timing
 8. **Upload to Supabase** → Store assets in cloud storage
+   - Video MP4 file
+   - Subtitle SRT file (if generated)
+   - All scene images and audio files
 
 ## 🔄 Integration with React Frontend
 
@@ -275,6 +332,49 @@ const generateStory = async (title, content) => {
     body: JSON.stringify({ title, content, num_scenes: 10 })
   });
   return await response.json();
+};
+
+// Build video with subtitles
+const buildVideo = async (images, sceneAudio, narrations, title) => {
+  const response = await fetch('http://localhost:5000/api/video/build', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      images: images, // Array of base64 encoded images
+      scene_audio: sceneAudio, // Object with scene_1, scene_2, etc.
+      title: title,
+      narrations: narrations, // Object or array of narration texts
+      generate_subtitles: true,
+      upload_to_supabase: true
+    })
+  });
+  const data = await response.json();
+  
+  // Decode video and subtitles
+  if (data.success) {
+    const videoBlob = base64ToBlob(data.video, 'video/mp4');
+    const subtitlesBlob = data.subtitles 
+      ? base64ToBlob(data.subtitles, 'text/plain')
+      : null;
+    
+    return {
+      video: videoBlob,
+      subtitles: subtitlesBlob,
+      subtitlesUrl: data.subtitles_url,
+      timings: data.timings
+    };
+  }
+};
+
+// Helper function to convert base64 to Blob
+const base64ToBlob = (base64, mimeType) => {
+  const byteCharacters = atob(base64);
+  const byteNumbers = new Array(byteCharacters.length);
+  for (let i = 0; i < byteCharacters.length; i++) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i);
+  }
+  const byteArray = new Uint8Array(byteNumbers);
+  return new Blob([byteArray], { type: mimeType });
 };
 ```
 
@@ -310,6 +410,65 @@ EXPOSE 5000
 CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "app:app"]
 ```
 
+## 📝 Subtitle Implementation Details
+
+### How Subtitles Work
+
+1. **Generation**: Subtitles are generated from narration texts after video rendering
+2. **Format**: SRT (SubRip) format with HTML styling tags
+3. **Timing**: Calculated from scene durations which are based on audio length
+4. **Text Processing**: 
+   - Removes markdown formatting
+   - Extracts clean narration text
+   - Wraps text to max 3 lines per subtitle
+   - Applies styling (white text, black outline)
+
+### Subtitle File Structure
+
+```
+1
+00:00:00,000 --> 00:00:03,500
+<font size='28' face='Arial' color='#FFFFFF' outline='2' outline-color='#000000'>First subtitle line</font>
+
+2
+00:00:03,500 --> 00:00:07,200
+<font size='28' face='Arial' color='#FFFFFF' outline='2' outline-color='#000000'>Second subtitle line</font>
+```
+
+### Using Subtitles in Frontend
+
+**Option 1: HTML5 Video Player**
+```html
+<video controls>
+  <source src="video.mp4" type="video/mp4">
+  <track kind="subtitles" src="subtitles.srt" srclang="en" label="English" default>
+</video>
+```
+
+**Option 2: Download Link**
+```javascript
+<a href={subtitlesUrl} download="video.srt">
+  Download Subtitles
+</a>
+```
+
+**Option 3: VLC/External Players**
+- Place SRT file in same directory as video with same name
+- Most players will auto-detect and load subtitles
+
+### Limitations & Future Improvements
+
+**Current Limitations:**
+- Subtitles are external files (not burned into video)
+- May not work with all video players
+- Not visible on social media platforms
+
+**Future Enhancements:**
+- Option to burn subtitles directly into video using MoviePy TextClip
+- Multiple language subtitle support
+- Subtitle customization (position, size, colors)
+- Automatic subtitle synchronization improvements
+
 ## 🤝 Contributing
 
 This is a complete conversion from Streamlit to Flask. All functionality has been preserved and enhanced with:
@@ -319,6 +478,7 @@ This is a complete conversion from Streamlit to Flask. All functionality has bee
 - Better error handling
 - Request validation
 - Comprehensive logging
+- Subtitle generation support
 
 ## 📝 License
 
@@ -331,8 +491,14 @@ For issues or questions:
 2. Review [API_DOCUMENTATION.md](./API_DOCUMENTATION.md)
 3. Verify all environment variables are set correctly
 4. Check that all API keys are valid and have sufficient quota
+5. For subtitle issues, see [SUBTITLE_ANALYSIS.md](./SUBTITLE_ANALYSIS.md)
+
+## 📋 Related Documentation
+
+- [API_DOCUMENTATION.md](./API_DOCUMENTATION.md) - Complete API reference
+- [SUBTITLE_ANALYSIS.md](./SUBTITLE_ANALYSIS.md) - Detailed subtitle implementation analysis
 
 ---
 
-**Note:** This Flask backend replaces the Streamlit application entirely and provides a production-ready API for your React frontend.
+**Note:** This Flask backend replaces the Streamlit application entirely and provides a production-ready API for your React frontend. Subtitles are generated as external SRT files for maximum compatibility with various video players.
 

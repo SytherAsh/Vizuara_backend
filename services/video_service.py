@@ -327,7 +327,6 @@ class VideoService:
         
         # Fallback: Try MoviePy (requires saving to temp file)
         try:
-            import tempfile
             with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as tmp:
                 tmp.write(audio_data)
                 tmp_path = tmp.name
@@ -489,10 +488,7 @@ class VideoService:
         if not images:
             raise ValueError("❌ No images provided")
         
-        logger.info("Building video with MoviePy...")
-        logger.info(f"   Processing {len(images)} scenes...")
-        if max_video_duration:
-            logger.info(f"   Maximum video duration: {max_video_duration:.1f}s")
+        logger.info(f"Building video: {len(images)} scenes, max_duration={max_video_duration:.1f}s" if max_video_duration else f"Building video: {len(images)} scenes")
 
         title_sanitized = title_sanitized or sanitize_filename(title)
         subtitles_bytes: Optional[bytes] = None
@@ -513,23 +509,43 @@ class VideoService:
         
         # Ephemeral temp workspace; cleaned automatically
         with tempfile.TemporaryDirectory(prefix='vidyai_video_') as temp_dir:
-            logger.info(f"Using temp directory: {temp_dir}")
+            logger.debug(f"Using temp directory: {temp_dir}")
             
             # First pass: Get actual audio durations and calculate scene durations
+            # Parallelize audio duration calculation for better performance
             audio_durations = []
             scene_durations = []
-            for idx, img_data in enumerate(images):
+            
+            # Use ThreadPoolExecutor for I/O-bound audio duration calculations
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            
+            def calculate_duration(idx):
                 scene_num = idx + 1
                 scene_key = f"scene_{scene_num}"
                 audio_data = scene_audio.get(scene_key)
-                
                 if audio_data:
-                    audio_duration = self._get_audio_duration_seconds(audio_data)
-                    audio_durations.append(audio_duration)
-                    scene_durations.append(max(min_scene_seconds, audio_duration + head_pad + tail_pad))
-                else:
-                    audio_durations.append(0.0)
-                    scene_durations.append(min_scene_seconds)
+                    duration = self._get_audio_duration_seconds(audio_data)
+                    return idx, duration
+                return idx, 0.0
+            
+            # Process audio durations in parallel (I/O-bound operation)
+            with ThreadPoolExecutor(max_workers=min(4, len(images))) as executor:
+                future_to_idx = {executor.submit(calculate_duration, idx): idx for idx in range(len(images))}
+                results = {}
+                for future in as_completed(future_to_idx):
+                    try:
+                        idx, duration = future.result()
+                        results[idx] = duration
+                    except Exception as e:
+                        idx = future_to_idx[future]
+                        logger.warning(f"Failed to calculate duration for scene {idx + 1}: {e}")
+                        results[idx] = 0.0
+            
+            # Build durations list in order
+            for idx in range(len(images)):
+                audio_duration = results.get(idx, 0.0)
+                audio_durations.append(audio_duration)
+                scene_durations.append(max(min_scene_seconds, audio_duration + head_pad + tail_pad))
             
             # Calculate total duration (accounting for crossfades)
             total_duration = sum(scene_durations)
@@ -648,7 +664,7 @@ class VideoService:
                                         narr = narr.with_duration(audio_max_duration)
                                         logger.warning(f"   ⚠️  Trimmed audio for scene {scene_num} from {original_duration:.2f}s to {audio_max_duration:.2f}s")
                                     else:
-                                        logger.info(f"   ✅ Audio for scene {scene_num}: {original_duration:.2f}s fits perfectly in scene ({duration:.2f}s)")
+                                        logger.debug(f"Audio scene {scene_num}: {original_duration:.2f}s fits in {duration:.2f}s")
                                     
                                     effects = []
                                     if adjusted_head_pad > 0 and afx:
@@ -671,13 +687,13 @@ class VideoService:
                                         narr = narr.subclip(0, audio_max_duration)
                                         logger.warning(f"   ⚠️  Trimmed audio for scene {scene_num} from {original_duration:.2f}s to {audio_max_duration:.2f}s")
                                     else:
-                                        logger.info(f"   ✅ Audio for scene {scene_num}: {original_duration:.2f}s fits perfectly in scene ({duration:.2f}s)")
+                                        logger.debug(f"Audio scene {scene_num}: {original_duration:.2f}s fits in {duration:.2f}s")
                                     
                                     narr = narr.audio_fadein(adjusted_head_pad).audio_fadeout(adjusted_tail_pad)
                                     narr = narr.set_start(current_start)
                                 
                                 audio_tracks.append(narr)
-                                logger.info(f"   Added audio for scene {scene_num} (duration: {narr.duration:.2f}s, start: {current_start:.2f}s, end: {current_start + narr.duration:.2f}s)")
+                                logger.debug(f"Added audio scene {scene_num}: {narr.duration:.2f}s")
                             except Exception as e:
                                 logger.warning(f"Could not load audio for scene {scene_num}: {e}")
                         
@@ -700,7 +716,7 @@ class VideoService:
                             total_scenes
                         )
                         
-                        logger.info(f"Scene {scene_num} processed ({duration:.1f}s)")
+                        logger.debug(f"Scene {scene_num} processed ({duration:.1f}s)")
                         
                     except Exception as e:
                         logger.error(f"Error processing scene {scene_num}: {e}")
@@ -713,34 +729,29 @@ class VideoService:
                 progress_tracker.set_progress(task_id, 60, "Combining video clips...", total_scenes, total_scenes)
                 
                 # Combine video clips
-                logger.info(f"   Combining {len(video_clips)} video clips...")
+                logger.debug(f"Combining {len(video_clips)} video clips...")
                 if MOVIEPY_VERSION == 2:
                     final_video = CompositeVideoClip(video_clips)
                 else:
                     final_video = mpe.CompositeVideoClip(video_clips)
                 
-                logger.info(f"Combined {len(video_clips)} video scenes")
+                logger.debug(f"Combined {len(video_clips)} video scenes")
                 
                 # Update progress: 70% - combining audio
                 progress_tracker.set_progress(task_id, 70, "Combining audio tracks...", total_scenes, total_scenes)
                 
                 # Combine audio
                 if audio_tracks:
-                    logger.info(f"   Processing {len(audio_tracks)} audio tracks...")
-                    for i, track in enumerate(audio_tracks, 1):
-                        start = track.start if hasattr(track, 'start') else 0
-                        dur = track.duration if hasattr(track, 'duration') else 0
-                        end = start + dur if dur else 0
-                        logger.info(f"   Track {i}: start={start:.2f}s, duration={dur:.2f}s, end={end:.2f}s")
-                    
+                    logger.debug(f"Processing {len(audio_tracks)} audio tracks...")
                     try:
                         if MOVIEPY_VERSION == 2:
                             base_audio = CompositeAudioClip(audio_tracks)
-                            logger.info(f"   Combined audio duration: {base_audio.duration}")
+                            logger.debug(f"Combined audio duration: {base_audio.duration:.2f}s")
                         else:
                             base_audio = mpe.CompositeAudioClip(audio_tracks)
-                            logger.info(f"   Combined audio duration: {base_audio.duration}")
+                            logger.debug(f"Combined audio duration: {base_audio.duration:.2f}s")
                         
+                        # Add background music if provided
                         if bg_music_data:
                             try:
                                 music_path = os.path.join(temp_dir, "bg_music.mp3")
@@ -757,19 +768,20 @@ class VideoService:
                                     music = music.set_duration(final_video.duration)
                                     final_audio = mpe.CompositeAudioClip([base_audio, music])
                                 
-                                logger.info("Added background music")
+                                logger.debug("Added background music")
                             except Exception as e:
                                 logger.warning(f"Could not add background music: {e}")
                                 final_audio = base_audio
                         else:
                             final_audio = base_audio
                         
+                        # Attach audio to video
                         if MOVIEPY_VERSION == 2:
                             final_video = final_video.with_audio(final_audio)
                         else:
                             final_video = final_video.set_audio(final_audio)
                         
-                        logger.info(f"✅ Audio attached to video (audio: {final_audio.duration:.2f}s, video: {final_video.duration:.2f}s)")
+                        logger.debug(f"Audio attached: {final_audio.duration:.2f}s audio, {final_video.duration:.2f}s video")
                     except Exception as e:
                         logger.error(f"Error combining audio: {e}")
                         import traceback
@@ -781,7 +793,7 @@ class VideoService:
                 # Update progress: 80% - rendering video
                 progress_tracker.set_progress(task_id, 80, "Rendering final video...", total_scenes, total_scenes)
                 
-                logger.info(f"Writing final video...")
+                logger.info("Rendering final video...")
                 safe_title = title_sanitized or sanitize_filename(title)
                 output_path = os.path.join(temp_dir, f"{safe_title}.mp4")
                 
@@ -826,12 +838,9 @@ class VideoService:
                             subtitles_local_path = os.path.join(temp_dir, f"{safe_title}.srt")
                             with open(subtitles_local_path, "w", encoding="utf-8") as srt_file:
                                 srt_file.write(subtitles_text)
-                            logger.info(f"✅ Generated subtitles for {safe_title}")
+                            logger.info(f"Generated subtitles for {safe_title}")
                         else:
-                            if narrations:
-                                logger.info("No subtitles generated (missing timings)")
-                            else:
-                                logger.info("No subtitles generated (missing narrations or timings)")
+                            logger.debug("No subtitles generated (missing narrations or timings)")
                     except Exception as e:
                         logger.warning(f"Failed to generate subtitles: {e}")
                         import traceback
@@ -878,13 +887,12 @@ class VideoService:
                 import time
                 time.sleep(0.1)
                 
-                logger.info("Video generation complete")
+                logger.info(f"Video generation complete: {len(video_data) / (1024*1024):.1f}MB")
                 if return_subtitles:
                     return {
                         "video_data": video_data,
                         "timings": timings,
                         "subtitles_bytes": subtitles_bytes,
-                        "subtitles_local_path": subtitles_local_path,
                         "title_sanitized": safe_title
                     }
                 return video_data

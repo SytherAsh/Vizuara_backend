@@ -11,6 +11,7 @@ from .audio_routes import audio_bp
 from .video_routes import video_bp
 from .storage_routes import storage_bp
 from .project_routes import project_bp
+from .progress_routes import progress_bp
 
 __all__ = [
     'wikipedia_bp',
@@ -20,6 +21,7 @@ __all__ = [
     'audio_bp',
     'video_bp',
     'storage_bp',
-    'project_bp'
+    'project_bp',
+    'progress_bp'
 ]
 

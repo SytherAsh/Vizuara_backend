@@ -175,6 +175,13 @@ def build_video():
             subtitles_bytes = None
             timings = None
 
+        # Validate video data exists
+        if not video_data:
+            return jsonify({
+                'success': False,
+                'error': 'Video generation failed - no video data returned'
+            }), 500
+
         # Convert to base64
         video_base64 = base64.b64encode(video_data).decode('utf-8') if video_data else None
         subtitles_base64 = base64.b64encode(subtitles_bytes).decode('utf-8') if subtitles_bytes else None
@@ -365,6 +372,13 @@ def build_from_supabase():
             video_data = video_result
             subtitles_bytes = None
             timings = None
+        
+        # Validate video data exists
+        if not video_data:
+            return jsonify({
+                'success': False,
+                'error': 'Video generation failed - no video data returned'
+            }), 500
         
         # Upload to Supabase
         video_path = f"{title_sanitized}/{title_sanitized}.mp4"
