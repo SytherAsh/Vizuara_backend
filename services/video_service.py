@@ -5,6 +5,7 @@ Handles video compilation from images and audio using MoviePy
 
 import os
 import re
+import time
 import logging
 import tempfile
 from typing import List, Dict, Any, Optional, Tuple
@@ -51,6 +52,103 @@ try:
     os.environ["IMAGEIO_FFMPEG_EXE"] = imageio_ffmpeg.get_ffmpeg_exe()
 except Exception:
     pass
+
+
+class MoviePyProgressLogger:
+    """
+    Custom logger that intercepts MoviePy's progress output and updates
+    internal progress tracker without requiring backend requests.
+    This eliminates the need for repeated polling during video rendering.
+    """
+    def __init__(self, progress_tracker, task_id, start_percent=80, end_percent=95):
+        """
+        Args:
+            progress_tracker: ProgressTracker instance
+            task_id: Task ID for progress tracking
+            start_percent: Starting progress percentage (when rendering begins)
+            end_percent: Ending progress percentage (when rendering completes)
+        """
+        self.progress_tracker = progress_tracker
+        self.task_id = task_id
+        self.start_percent = start_percent
+        self.end_percent = end_percent
+        self.progress_range = end_percent - start_percent
+        self.last_update_percent = start_percent
+        self.last_update_time = time.time()
+        self.min_update_interval = 2.0  # Update at most once every 2 seconds
+        self.min_progress_delta = 2  # Only update if progress changed by at least 2%
+        
+        # Pattern to match MoviePy progress bar output
+        # Example: "frame_index:  20%|████| 328/1631 [01:54<08:06, 2.68it/s]"
+        self.re_pattern = re.compile(
+            r'frame_index:\s*(\d+)%\|.*?\|.*?(\d+)/(\d+).*?\[(.*?)\]',
+            re.IGNORECASE
+        )
+    
+    def __call__(self, message):
+        """Called by MoviePy with progress messages"""
+        if not message:
+            return
+        
+        message_str = str(message)
+        
+        # Parse MoviePy progress bar output
+        match = self.re_pattern.search(message_str)
+        if match:
+            try:
+                percent_str = match.group(1)
+                current_frame = int(match.group(2))
+                total_frames = int(match.group(3))
+                time_info = match.group(4)
+                
+                # Calculate rendering progress (0.0 to 1.0)
+                if total_frames > 0:
+                    rendering_progress = current_frame / total_frames
+                else:
+                    rendering_progress = float(percent_str) / 100.0
+                
+                # Map to overall progress (80% to 95%)
+                overall_progress = int(self.start_percent + (rendering_progress * self.progress_range))
+                
+                # Throttle updates: only update if enough time passed AND progress changed significantly
+                current_time = time.time()
+                progress_delta = abs(overall_progress - self.last_update_percent)
+                time_delta = current_time - self.last_update_time
+                
+                if (progress_delta >= self.min_progress_delta and 
+                    time_delta >= self.min_update_interval):
+                    
+                    # Parse time remaining from MoviePy output
+                    time_remaining = None
+                    if '<' in time_info:
+                        try:
+                            time_parts = time_info.split('<')[1].split(',')[0].strip()
+                            # Parse MM:SS format
+                            if ':' in time_parts:
+                                mins, secs = map(int, time_parts.split(':'))
+                                time_remaining = mins * 60 + secs
+                        except:
+                            pass
+                    
+                    message_text = f"Rendering video... {percent_str}%"
+                    if time_remaining:
+                        message_text += f" (~{time_remaining}s remaining)"
+                    
+                    # Update progress tracker (in-memory, no backend request)
+                    self.progress_tracker.set_progress(
+                        self.task_id,
+                        overall_progress,
+                        message_text,
+                        current_frame,
+                        total_frames
+                    )
+                    
+                    self.last_update_percent = overall_progress
+                    self.last_update_time = current_time
+                    
+            except Exception as e:
+                # Silently ignore parsing errors to avoid disrupting video generation
+                logger.debug(f"Progress parsing error: {e}")
 
 
 class VideoService:
@@ -687,6 +785,10 @@ class VideoService:
                 safe_title = title_sanitized or sanitize_filename(title)
                 output_path = os.path.join(temp_dir, f"{safe_title}.mp4")
                 
+                # Use custom logger that intercepts MoviePy progress internally
+                # This avoids repeated backend requests during video rendering
+                custom_logger = MoviePyProgressLogger(progress_tracker, task_id, start_percent=80, end_percent=95)
+                
                 final_video.write_videofile(
                     output_path,
                     fps=fps,
@@ -696,7 +798,7 @@ class VideoService:
                     preset='medium',
                     temp_audiofile=os.path.join(temp_dir, "temp-audio.m4a"),
                     remove_temp=False,
-                    logger='bar'
+                    logger=custom_logger  # Use custom logger instead of 'bar'
                 )
                 
                 # Update progress: 95% - finalizing
@@ -709,9 +811,15 @@ class VideoService:
                 # Generate subtitles if requested (best-effort, non-blocking on failure)
                 if generate_subtitles:
                     try:
-                        narrations = subtitle_narrations or self._load_scene_narrations(
-                            title_sanitized, len(images)
-                        )
+                        # Use provided narrations or try to load from Supabase
+                        narrations = subtitle_narrations
+                        if not narrations:
+                            narrations = self._load_scene_narrations(title_sanitized, len(images))
+                        
+                        # If narrations is a list, clean each narration text
+                        if narrations and isinstance(narrations, list):
+                            narrations = [self._clean_narration_for_subtitles(str(n)) for n in narrations]
+                        
                         subtitles_text = self._generate_subtitles_text(timings, narrations) if narrations else None
                         if subtitles_text:
                             subtitles_bytes = subtitles_text.encode('utf-8')
@@ -720,9 +828,14 @@ class VideoService:
                                 srt_file.write(subtitles_text)
                             logger.info(f"✅ Generated subtitles for {safe_title}")
                         else:
-                            logger.info("No subtitles generated (missing narrations or timings)")
+                            if narrations:
+                                logger.info("No subtitles generated (missing timings)")
+                            else:
+                                logger.info("No subtitles generated (missing narrations or timings)")
                     except Exception as e:
                         logger.warning(f"Failed to generate subtitles: {e}")
+                        import traceback
+                        logger.debug(traceback.format_exc())
                 
                 # Mark as complete
                 progress_tracker.set_progress(task_id, 100, "Video generation complete!", total_scenes, total_scenes)

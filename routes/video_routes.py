@@ -29,6 +29,7 @@ def build_video():
             "images": list[str] (base64 encoded),
             "scene_audio": dict (scene_key -> base64 audio),
             "title": str,
+            "narrations": dict or list (optional, for subtitle generation),
             "fps": int (optional, default: 30),
             "resolution": list[int, int] (optional, default: [1920, 1080]),
             "crossfade_sec": float (optional, default: 0.3),
@@ -42,7 +43,8 @@ def build_video():
             "kb_zoom_end": float (optional, default: 1.15),
             "kb_pan": str (optional, default: "auto", choices: "auto", "left", "right", "up", "down", "none"),
             "upload_to_supabase": bool (optional, default: false),
-            "project_name": str (optional, for supabase path)
+            "project_name": str (optional, for supabase path),
+            "generate_subtitles": bool (optional, default: same as upload_to_supabase)
         }
     
     Response JSON:
@@ -101,6 +103,46 @@ def build_video():
         if 'bg_music' in data and data['bg_music']:
             bg_music_data = base64.b64decode(data['bg_music'])
         
+        # Extract narrations for subtitle generation
+        # Narrations can come in different formats:
+        # 1. Dict with scene keys: {"scene_1": {"narration": "text"}, ...}
+        # 2. List of narration texts: ["text1", "text2", ...]
+        # 3. Dict with narrations nested: {"narrations": {"scene_1": {...}}}
+        subtitle_narrations_list = None
+        if generate_subtitles and 'narrations' in data:
+            narrations_data = data['narrations']
+            subtitle_narrations_list = []
+            
+            # Handle dict format with scene keys
+            if isinstance(narrations_data, dict):
+                # Check if it's nested format: {"narrations": {"scene_1": {...}}}
+                if 'narrations' in narrations_data:
+                    narrations_data = narrations_data['narrations']
+                
+                # Extract narration texts in order (scene_1, scene_2, ...)
+                num_scenes = len(images)
+                for i in range(1, num_scenes + 1):
+                    scene_key = f"scene_{i}"
+                    if scene_key in narrations_data:
+                        scene_data = narrations_data[scene_key]
+                        # Handle both {"narration": "text"} and direct text
+                        if isinstance(scene_data, dict):
+                            narration_text = scene_data.get('narration', '')
+                        else:
+                            narration_text = str(scene_data)
+                        subtitle_narrations_list.append(narration_text)
+                    else:
+                        subtitle_narrations_list.append('')
+            
+            # Handle list format
+            elif isinstance(narrations_data, list):
+                subtitle_narrations_list = [str(n) for n in narrations_data]
+                # Pad or truncate to match number of images
+                num_scenes = len(images)
+                while len(subtitle_narrations_list) < num_scenes:
+                    subtitle_narrations_list.append('')
+                subtitle_narrations_list = subtitle_narrations_list[:num_scenes]
+        
         # Build video with all customization options and optional subtitles
         video_result = video_service.build_video(
             images=images,
@@ -120,7 +162,8 @@ def build_video():
             kb_pan=kb_pan,
             title_sanitized=title_sanitized,
             generate_subtitles=generate_subtitles,
-            return_subtitles=True
+            return_subtitles=True,
+            subtitle_narrations=subtitle_narrations_list
         )
 
         if isinstance(video_result, dict):
