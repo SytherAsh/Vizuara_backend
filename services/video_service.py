@@ -4,11 +4,15 @@ Handles video compilation from images and audio using MoviePy
 """
 
 import os
+import re
 import logging
+import tempfile
 from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 from PIL import Image
 from io import BytesIO
+from services.supabase_service import supabase_service
+from utils.helpers import sanitize_filename
 
 logger = logging.getLogger("VidyAI_Flask")
 
@@ -58,6 +62,158 @@ class VideoService:
             logger.error("MoviePy is not available. Video generation will not work.")
         else:
             logger.info(f"VideoService initialized with MoviePy {MOVIEPY_VERSION}.x")
+
+    # ------------------------------------------------------------------
+    # Subtitle helpers
+    # ------------------------------------------------------------------
+    def _clean_narration_for_subtitles(self, raw: str) -> str:
+        """
+        Strip headings/markdown so subtitles contain only spoken text.
+        """
+        if not raw:
+            return ""
+
+        text = raw.replace("\r\n", "\n")
+
+        # Prefer "Narration Text" section if present
+        match = re.search(
+            r"##\s*Narration\s*Text\s*(.*?)(?:^=+|^##\s*Original Scene Prompt|^##\s*Narrative Context|\Z)",
+            text,
+            flags=re.IGNORECASE | re.DOTALL | re.MULTILINE,
+        )
+        if match:
+            text = match.group(1).strip()
+        else:
+            lines = []
+            for line in text.split("\n"):
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                if stripped.startswith("#"):
+                    continue
+                if stripped.lower().startswith(("original scene prompt", "narrative context")):
+                    continue
+                if set(stripped) <= {"=", "-"} and len(stripped) >= 3:
+                    continue
+                lines.append(stripped)
+            text = "\n".join(lines).strip()
+
+        text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
+        text = re.sub(r"\*(.*?)\*", r"\1", text)
+        text = re.sub(r"\n{2,}", "\n", text)
+        return text.strip()
+
+    def _format_srt_time(self, seconds: float) -> str:
+        if seconds < 0:
+            seconds = 0
+        total_ms = int(round(seconds * 1000))
+        ms = total_ms % 1000
+        total_seconds = total_ms // 1000
+        s = total_seconds % 60
+        total_minutes = total_seconds // 60
+        m = total_minutes % 60
+        h = total_minutes // 60
+        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+    def _split_into_lines(self, text: str, max_len: int = 42) -> List[str]:
+        words = text.strip().split()
+        if not words:
+            return []
+
+        lines = []
+        current = []
+        for word in words:
+            candidate = (" ".join(current + [word])).strip()
+            if len(candidate) <= max_len:
+                current.append(word)
+            else:
+                if current:
+                    lines.append(" ".join(current))
+                current = [word]
+        if current:
+            lines.append(" ".join(current))
+        return lines
+
+    def _load_scene_narrations(self, title_sanitized: str, num_scenes: int) -> Optional[List[str]]:
+        """
+        Load per-scene narration text from Supabase text bucket.
+        Path: text/{title_sanitized}/scene_{i}_narration.txt
+        """
+        narrations: List[str] = []
+        if not title_sanitized:
+            return None
+
+        for i in range(1, num_scenes + 1):
+            path = f"{title_sanitized}/scene_{i}_narration.txt"
+            try:
+                result = supabase_service.download_file('text', path)
+                if result.get('success') and result.get('file_data'):
+                    raw = result['file_data'].decode('utf-8', errors='ignore')
+                    narrations.append(self._clean_narration_for_subtitles(raw))
+                else:
+                    narrations.append("")
+            except Exception as e:
+                logger.debug(f"Could not load narration for scene {i} at {path}: {e}")
+                narrations.append("")
+
+        if all(not n for n in narrations):
+            return None
+        return narrations
+
+    def _generate_subtitles_text(self, timings: List[Dict[str, Any]], narrations: List[str]) -> Optional[str]:
+        if not timings or not narrations:
+            return None
+
+        timings_sorted = sorted(timings, key=lambda t: t.get("start", 0.0))
+        lines: List[str] = []
+        block_index = 1
+
+        for t in timings_sorted:
+            scene_num = t.get("scene")
+            if not isinstance(scene_num, int):
+                continue
+
+            if scene_num < 1 or scene_num > len(narrations):
+                text = ""
+            else:
+                text = (narrations[scene_num - 1] or "").strip()
+
+            if not text:
+                continue
+
+            start = float(t.get("start", 0.0))
+            end = float(t.get("end", start))
+
+            start_str = self._format_srt_time(start)
+            end_str = self._format_srt_time(end)
+
+            best_lines = None
+            for width in [90, 110, 120]:
+                test_lines = self._split_into_lines(text, max_len=width)
+                if len(test_lines) <= 3:
+                    best_lines = test_lines
+                    break
+            if best_lines is None:
+                best_lines = self._split_into_lines(text, max_len=120)[:3]
+
+            styled_lines = [
+                f"<font size='28' face='Arial' color='#FFFFFF' outline='2' outline-color='#000000'>{line}</font>"
+                for line in best_lines
+            ]
+
+            block = [
+                str(block_index),
+                f"{start_str} --> {end_str}",
+                *styled_lines,
+                "",
+            ]
+            lines.extend(block)
+            block_index += 1
+
+        if block_index == 1:
+            return None
+
+        return "\n".join(lines)
     
     def _get_audio_duration_seconds(self, audio_data: bytes) -> float:
         """Get audio duration from bytes"""
@@ -195,8 +351,12 @@ class VideoService:
         kb_zoom_start: float = 1.05,
         kb_zoom_end: float = 1.15,
         kb_pan: str = "auto",
-        max_video_duration: Optional[float] = None
-    ) -> bytes:
+        max_video_duration: Optional[float] = None,
+        title_sanitized: Optional[str] = None,
+        generate_subtitles: bool = False,
+        return_subtitles: bool = False,
+        subtitle_narrations: Optional[List[str]] = None
+    ) -> Any:
         """
         Build video from images and audio
         
@@ -217,9 +377,13 @@ class VideoService:
             kb_zoom_end: Ken Burns end zoom
             kb_pan: Ken Burns pan direction
             max_video_duration: Maximum video duration in seconds (None = no limit)
+            title_sanitized: Folder-safe title for Supabase paths
+            generate_subtitles: Generate SRT subtitles using narrations
+            return_subtitles: Return subtitles bytes/timings instead of just video bytes
+            subtitle_narrations: Optional narrations list to bypass loader
             
         Returns:
-            Video data as bytes
+            Video data as bytes, or dict when return_subtitles=True
         """
         if not MOVIEPY_AVAILABLE:
             raise ImportError("❌ MoviePy is required for video generation")
@@ -231,412 +395,412 @@ class VideoService:
         logger.info(f"   Processing {len(images)} scenes...")
         if max_video_duration:
             logger.info(f"   Maximum video duration: {max_video_duration:.1f}s")
+
+        title_sanitized = title_sanitized or sanitize_filename(title)
+        subtitles_bytes: Optional[bytes] = None
+        subtitles_local_path: Optional[str] = None
         
         timings = []
         current_start = 0.0
         video_clips = []
         audio_tracks = []
         
-        # Create temporary directory for working files (use local data folder)
-        import tempfile
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        data_dir = os.path.join(base_dir, 'data', 'temp')
-        os.makedirs(data_dir, exist_ok=True)
-        temp_dir = tempfile.mkdtemp(dir=data_dir, prefix='video_')
-        logger.info(f"Using temp directory: {temp_dir}")
+        # Import progress tracker
+        from services.progress_service import progress_tracker
+        task_id = f"video_{title.replace(' ', '_')}"
+        total_scenes = len(images)
         
-        # First pass: Get actual audio durations and calculate scene durations
-        # This ensures we use ALL audio without trimming
-        audio_durations = []
-        scene_durations = []
+        # Initialize progress
+        progress_tracker.set_progress(task_id, 5, "Initializing video build...", 0, total_scenes)
         
-        # Get actual audio durations (no need to save files, use existing method)
-        for idx, img_data in enumerate(images):
-            scene_num = idx + 1
-            scene_key = f"scene_{scene_num}"
-            audio_data = scene_audio.get(scene_key)
+        # Ephemeral temp workspace; cleaned automatically
+        with tempfile.TemporaryDirectory(prefix='vidyai_video_') as temp_dir:
+            logger.info(f"Using temp directory: {temp_dir}")
             
-            if audio_data:
-                # Get actual audio duration
-                audio_duration = self._get_audio_duration_seconds(audio_data)
-                audio_durations.append(audio_duration)
-                
-                # Scene duration = audio duration + padding
-                # This ensures ALL audio fits within the scene
-                scene_duration = max(min_scene_seconds, audio_duration + head_pad + tail_pad)
-                scene_durations.append(scene_duration)
-            else:
-                # No audio for this scene
-                audio_durations.append(0.0)
-                scene_durations.append(min_scene_seconds)
-        
-        # Calculate total duration (accounting for crossfades)
-        total_duration = sum(scene_durations)
-        if len(scene_durations) > 1:
-            total_duration -= crossfade_sec * (len(scene_durations) - 1)
-        
-        # If max_video_duration is set, reduce padding instead of scaling durations
-        # This preserves ALL audio content
-        adjusted_head_pad = head_pad
-        adjusted_tail_pad = tail_pad
-        
-        if max_video_duration and total_duration > max_video_duration:
-            # Calculate how much we need to reduce
-            excess_duration = total_duration - max_video_duration
-            total_padding = (head_pad + tail_pad) * len([a for a in audio_durations if a > 0])
-            
-            if total_padding > 0:
-                # Reduce padding proportionally
-                padding_reduction = min(excess_duration / total_padding, 0.8)  # Max 80% reduction
-                adjusted_head_pad = head_pad * (1 - padding_reduction)
-                adjusted_tail_pad = tail_pad * (1 - padding_reduction)
-                
-                # Recalculate scene durations with reduced padding
-                scene_durations = []
-                for audio_dur in audio_durations:
-                    if audio_dur > 0:
-                        scene_duration = max(min_scene_seconds, audio_dur + adjusted_head_pad + adjusted_tail_pad)
-                    else:
-                        scene_duration = min_scene_seconds
-                    scene_durations.append(scene_duration)
-                
-                # Recalculate total
-                total_duration = sum(scene_durations)
-                if len(scene_durations) > 1:
-                    total_duration -= crossfade_sec * (len(scene_durations) - 1)
-                
-                logger.info(f"   Video duration ({total_duration:.1f}s) exceeds max ({max_video_duration:.1f}s)")
-                logger.info(f"   Reducing padding from {head_pad + tail_pad:.2f}s to {adjusted_head_pad + adjusted_tail_pad:.2f}s per scene")
-                logger.info(f"   Adjusted total duration: {total_duration:.1f}s (preserving ALL audio)")
-            else:
-                # If padding reduction isn't enough, we'll need to trim (last resort)
-                duration_scale = max_video_duration / total_duration
-                logger.warning(f"   Video duration ({total_duration:.1f}s) exceeds max ({max_video_duration:.1f}s)")
-                logger.warning(f"   Padding reduction not sufficient. Applying scale factor: {duration_scale:.2f}x")
-                logger.warning(f"   ⚠️  Some audio may be trimmed to fit within limit")
-                scene_durations = [d * duration_scale for d in scene_durations]
-                scene_durations = [max(min_scene_seconds, d) for d in scene_durations]
-                total_duration = sum(scene_durations)
-                if len(scene_durations) > 1:
-                    total_duration -= crossfade_sec * (len(scene_durations) - 1)
-                logger.info(f"   Adjusted total duration: {total_duration:.1f}s")
-        
-        try:
-            # Process each scene
+            # First pass: Get actual audio durations and calculate scene durations
+            audio_durations = []
+            scene_durations = []
             for idx, img_data in enumerate(images):
                 scene_num = idx + 1
                 scene_key = f"scene_{scene_num}"
                 audio_data = scene_audio.get(scene_key)
                 
-                if not img_data:
-                    logger.warning(f"No image data for scene {scene_num}, skipping")
-                    continue
+                if audio_data:
+                    audio_duration = self._get_audio_duration_seconds(audio_data)
+                    audio_durations.append(audio_duration)
+                    scene_durations.append(max(min_scene_seconds, audio_duration + head_pad + tail_pad))
+                else:
+                    audio_durations.append(0.0)
+                    scene_durations.append(min_scene_seconds)
+            
+            # Calculate total duration (accounting for crossfades)
+            total_duration = sum(scene_durations)
+            if len(scene_durations) > 1:
+                total_duration -= crossfade_sec * (len(scene_durations) - 1)
+            
+            # If max_video_duration is set, reduce padding instead of scaling durations
+            adjusted_head_pad = head_pad
+            adjusted_tail_pad = tail_pad
+            
+            if max_video_duration and total_duration > max_video_duration:
+                excess_duration = total_duration - max_video_duration
+                total_padding = (head_pad + tail_pad) * len([a for a in audio_durations if a > 0])
                 
-                # Use pre-calculated duration (based on actual audio duration + padding)
-                duration = scene_durations[idx]
-                actual_audio_duration = audio_durations[idx] if idx < len(audio_durations) else 0.0
-                
-                try:
-                    # Save image temporarily
-                    img_path = os.path.join(temp_dir, f"scene_{scene_num}.jpg")
-                    with open(img_path, 'wb') as f:
-                        f.write(img_data)
+                if total_padding > 0:
+                    padding_reduction = min(excess_duration / total_padding, 0.8)  # Max 80% reduction
+                    adjusted_head_pad = head_pad * (1 - padding_reduction)
+                    adjusted_tail_pad = tail_pad * (1 - padding_reduction)
                     
-                    # Create image clip
-                    if MOVIEPY_VERSION == 2:
-                        img_clip = ImageClip(img_path, duration=duration)
-                        img_clip = img_clip.resized(resolution)
-                        
-                        if ken_burns:
-                            img_clip = self._apply_ken_burns_v2(
-                                img_clip, duration, scene_num,
-                                kb_zoom_start, kb_zoom_end, kb_pan, resolution
-                            )
-                        
-                        img_clip = img_clip.with_start(current_start)
-                        
-                        if crossfade_sec > 0 and len(video_clips) > 0:
-                            img_clip = img_clip.with_effects([vfx.CrossFadeIn(crossfade_sec)])
-                    else:
-                        img_clip = mpe.ImageClip(img_path).set_duration(duration)
-                        img_clip = img_clip.resize(resolution)
-                        img_clip = img_clip.set_start(current_start)
-                        
-                        if crossfade_sec > 0 and len(video_clips) > 0:
-                            img_clip = img_clip.crossfadein(crossfade_sec)
+                    scene_durations = []
+                    for audio_dur in audio_durations:
+                        if audio_dur > 0:
+                            scene_duration = max(min_scene_seconds, audio_dur + adjusted_head_pad + adjusted_tail_pad)
+                        else:
+                            scene_duration = min_scene_seconds
+                        scene_durations.append(scene_duration)
                     
-                    video_clips.append(img_clip)
+                    total_duration = sum(scene_durations)
+                    if len(scene_durations) > 1:
+                        total_duration -= crossfade_sec * (len(scene_durations) - 1)
                     
-                    # Add audio - trim to scene duration to prevent overlapping
-                    if audio_data:
-                        try:
-                            audio_path = os.path.join(temp_dir, f"scene_{scene_num}.mp3")
-                            with open(audio_path, 'wb') as f:
-                                f.write(audio_data)
+                    logger.info(f"   Video duration ({total_duration:.1f}s) exceeds max ({max_video_duration:.1f}s)")
+                    logger.info(f"   Reducing padding from {head_pad + tail_pad:.2f}s to {adjusted_head_pad + adjusted_tail_pad:.2f}s per scene")
+                    logger.info(f"   Adjusted total duration: {total_duration:.1f}s (preserving ALL audio)")
+                else:
+                    duration_scale = max_video_duration / total_duration
+                    logger.warning(f"   Video duration ({total_duration:.1f}s) exceeds max ({max_video_duration:.1f}s)")
+                    logger.warning(f"   Padding reduction not sufficient. Applying scale factor: {duration_scale:.2f}x")
+                    logger.warning(f"   ⚠️  Some audio may be trimmed to fit within limit")
+                    scene_durations = [max(min_scene_seconds, d * duration_scale) for d in scene_durations]
+                    total_duration = sum(scene_durations)
+                    if len(scene_durations) > 1:
+                        total_duration -= crossfade_sec * (len(scene_durations) - 1)
+                    logger.info(f"   Adjusted total duration: {total_duration:.1f}s")
+            
+            try:
+                # Process each scene
+                for idx, img_data in enumerate(images):
+                    scene_num = idx + 1
+                    scene_key = f"scene_{scene_num}"
+                    audio_data = scene_audio.get(scene_key)
+                    
+                    # Update progress: 5-60% for scene processing
+                    progress_percent = 5 + int((idx / total_scenes) * 55)
+                    progress_tracker.set_progress(
+                        task_id,
+                        progress_percent,
+                        f"Processing scene {scene_num} of {total_scenes}",
+                        scene_num,
+                        total_scenes
+                    )
+                    
+                    if not img_data:
+                        logger.warning(f"No image data for scene {scene_num}, skipping")
+                        continue
+                    
+                    duration = scene_durations[idx]
+                    actual_audio_duration = audio_durations[idx] if idx < len(audio_durations) else 0.0
+                    
+                    try:
+                        # Save image temporarily
+                        img_path = os.path.join(temp_dir, f"scene_{scene_num}.jpg")
+                        with open(img_path, 'wb') as f:
+                            f.write(img_data)
+                        
+                        # Create image clip
+                        if MOVIEPY_VERSION == 2:
+                            img_clip = ImageClip(img_path, duration=duration)
+                            img_clip = img_clip.resized(resolution)
                             
-                            if MOVIEPY_VERSION == 2:
-                                narr = AudioFileClip(audio_path)
-                                original_duration = narr.duration
+                            if ken_burns:
+                                img_clip = self._apply_ken_burns_v2(
+                                    img_clip, duration, scene_num,
+                                    kb_zoom_start, kb_zoom_end, kb_pan, resolution
+                                )
+                            
+                            img_clip = img_clip.with_start(current_start)
+                            
+                            if crossfade_sec > 0 and len(video_clips) > 0:
+                                img_clip = img_clip.with_effects([vfx.CrossFadeIn(crossfade_sec)])
+                        else:
+                            img_clip = mpe.ImageClip(img_path).set_duration(duration)
+                            img_clip = img_clip.resize(resolution)
+                            img_clip = img_clip.set_start(current_start)
+                            
+                            if crossfade_sec > 0 and len(video_clips) > 0:
+                                img_clip = img_clip.crossfadein(crossfade_sec)
+                        
+                        video_clips.append(img_clip)
+                        
+                        # Add audio - trim to scene duration to prevent overlapping
+                        if audio_data:
+                            try:
+                                audio_path = os.path.join(temp_dir, f"scene_{scene_num}.mp3")
+                                with open(audio_path, 'wb') as f:
+                                    f.write(audio_data)
                                 
-                                # Calculate when next scene starts (accounting for crossfade)
-                                next_scene_start = current_start + duration - (crossfade_sec if crossfade_sec > 0 and len(video_clips) > 0 else 0)
-                                # Audio should end before next scene starts to prevent overlap
-                                audio_max_duration = next_scene_start - current_start
-                                
-                                # Scene duration is already calculated to fit audio + padding
-                                # But double-check: if audio is longer than scene, trim it (shouldn't happen with new logic)
-                                if narr.duration > audio_max_duration:
-                                    narr = narr.with_duration(audio_max_duration)
-                                    logger.warning(f"   ⚠️  Trimmed audio for scene {scene_num} from {original_duration:.2f}s to {audio_max_duration:.2f}s")
+                                if MOVIEPY_VERSION == 2:
+                                    narr = AudioFileClip(audio_path)
+                                    original_duration = narr.duration
+                                    
+                                    next_scene_start = current_start + duration - (crossfade_sec if crossfade_sec > 0 and len(video_clips) > 0 else 0)
+                                    audio_max_duration = next_scene_start - current_start
+                                    
+                                    if narr.duration > audio_max_duration:
+                                        narr = narr.with_duration(audio_max_duration)
+                                        logger.warning(f"   ⚠️  Trimmed audio for scene {scene_num} from {original_duration:.2f}s to {audio_max_duration:.2f}s")
+                                    else:
+                                        logger.info(f"   ✅ Audio for scene {scene_num}: {original_duration:.2f}s fits perfectly in scene ({duration:.2f}s)")
+                                    
+                                    effects = []
+                                    if adjusted_head_pad > 0 and afx:
+                                        effects.append(afx.AudioFadeIn(adjusted_head_pad))
+                                    if adjusted_tail_pad > 0 and afx:
+                                        effects.append(afx.AudioFadeOut(adjusted_tail_pad))
+                                    
+                                    if effects:
+                                        narr = narr.with_effects(effects)
+                                    
+                                    narr = narr.with_start(current_start)
                                 else:
-                                    logger.info(f"   ✅ Audio for scene {scene_num}: {original_duration:.2f}s fits perfectly in scene ({duration:.2f}s)")
+                                    narr = mpe.AudioFileClip(audio_path)
+                                    original_duration = narr.duration
+                                    
+                                    next_scene_start = current_start + duration - (crossfade_sec if crossfade_sec > 0 and len(video_clips) > 0 else 0)
+                                    audio_max_duration = next_scene_start - current_start
+                                    
+                                    if narr.duration > audio_max_duration:
+                                        narr = narr.subclip(0, audio_max_duration)
+                                        logger.warning(f"   ⚠️  Trimmed audio for scene {scene_num} from {original_duration:.2f}s to {audio_max_duration:.2f}s")
+                                    else:
+                                        logger.info(f"   ✅ Audio for scene {scene_num}: {original_duration:.2f}s fits perfectly in scene ({duration:.2f}s)")
+                                    
+                                    narr = narr.audio_fadein(adjusted_head_pad).audio_fadeout(adjusted_tail_pad)
+                                    narr = narr.set_start(current_start)
                                 
-                                # Apply fade in/out for smooth transitions using adjusted padding
-                                effects = []
-                                if adjusted_head_pad > 0 and afx:
-                                    effects.append(afx.AudioFadeIn(adjusted_head_pad))
-                                if adjusted_tail_pad > 0 and afx:
-                                    effects.append(afx.AudioFadeOut(adjusted_tail_pad))
-                                
-                                if effects:
-                                    narr = narr.with_effects(effects)
-                                
-                                # Set start time at scene start
-                                narr = narr.with_start(current_start)
-                            else:
-                                narr = mpe.AudioFileClip(audio_path)
-                                original_duration = narr.duration
-                                
-                                # Calculate when next scene starts (accounting for crossfade)
-                                next_scene_start = current_start + duration - (crossfade_sec if crossfade_sec > 0 and len(video_clips) > 0 else 0)
-                                # Audio should end before next scene starts to prevent overlap
-                                audio_max_duration = next_scene_start - current_start
-                                
-                                # Scene duration is already calculated to fit audio + padding
-                                # But double-check: if audio is longer than scene, trim it (shouldn't happen with new logic)
-                                if narr.duration > audio_max_duration:
-                                    narr = narr.subclip(0, audio_max_duration)
-                                    logger.warning(f"   ⚠️  Trimmed audio for scene {scene_num} from {original_duration:.2f}s to {audio_max_duration:.2f}s")
-                                else:
-                                    logger.info(f"   ✅ Audio for scene {scene_num}: {original_duration:.2f}s fits perfectly in scene ({duration:.2f}s)")
-                                
-                                # Apply fade in/out using adjusted padding
-                                narr = narr.audio_fadein(adjusted_head_pad).audio_fadeout(adjusted_tail_pad)
-                                # Set start time at scene start
-                                narr = narr.set_start(current_start)
-                            
-                            audio_tracks.append(narr)
-                            logger.info(f"   Added audio for scene {scene_num} (duration: {narr.duration:.2f}s, start: {current_start:.2f}s, end: {current_start + narr.duration:.2f}s)")
-                        except Exception as e:
-                            logger.warning(f"Could not load audio for scene {scene_num}: {e}")
-                    
-                    timings.append({
-                        "scene": scene_num,
-                        "start": current_start,
-                        "end": current_start + duration,
-                        "duration": duration
-                    })
-                    
-                    current_start += duration - (crossfade_sec if crossfade_sec > 0 and len(video_clips) > 1 else 0)
-                    
-                    logger.info(f"Scene {scene_num} processed ({duration:.1f}s)")
-                    
-                except Exception as e:
-                    logger.error(f"Error processing scene {scene_num}: {e}")
-                    continue
-            
-            if not video_clips:
-                raise ValueError("❌ No valid clips were created")
-            
-            # Combine video clips
-            logger.info(f"   Combining {len(video_clips)} video clips...")
-            if MOVIEPY_VERSION == 2:
-                final_video = CompositeVideoClip(video_clips)
-            else:
-                final_video = mpe.CompositeVideoClip(video_clips)
-            
-            logger.info(f"Combined {len(video_clips)} video scenes")
-            
-            # Combine audio
-            if audio_tracks:
-                logger.info(f"   Processing {len(audio_tracks)} audio tracks...")
-                for i, track in enumerate(audio_tracks, 1):
-                    start = track.start if hasattr(track, 'start') else 0
-                    dur = track.duration if hasattr(track, 'duration') else 0
-                    end = start + dur if dur else 0
-                    logger.info(f"   Track {i}: start={start:.2f}s, duration={dur:.2f}s, end={end:.2f}s")
+                                audio_tracks.append(narr)
+                                logger.info(f"   Added audio for scene {scene_num} (duration: {narr.duration:.2f}s, start: {current_start:.2f}s, end: {current_start + narr.duration:.2f}s)")
+                            except Exception as e:
+                                logger.warning(f"Could not load audio for scene {scene_num}: {e}")
+                        
+                        timings.append({
+                            "scene": scene_num,
+                            "start": current_start,
+                            "end": current_start + duration,
+                            "duration": duration
+                        })
+                        
+                        current_start += duration - (crossfade_sec if crossfade_sec > 0 and len(video_clips) > 1 else 0)
+                        
+                        # Update progress after scene completion
+                        progress_percent = 5 + int(((idx + 1) / total_scenes) * 55)
+                        progress_tracker.set_progress(
+                            task_id,
+                            progress_percent,
+                            f"Completed scene {scene_num} of {total_scenes}",
+                            scene_num,
+                            total_scenes
+                        )
+                        
+                        logger.info(f"Scene {scene_num} processed ({duration:.1f}s)")
+                        
+                    except Exception as e:
+                        logger.error(f"Error processing scene {scene_num}: {e}")
+                        continue
                 
-                try:
-                    if MOVIEPY_VERSION == 2:
-                        base_audio = CompositeAudioClip(audio_tracks)
-                        logger.info(f"   Combined audio duration: {base_audio.duration}")
-                    else:
-                        base_audio = mpe.CompositeAudioClip(audio_tracks)
-                        logger.info(f"   Combined audio duration: {base_audio.duration}")
+                if not video_clips:
+                    raise ValueError("❌ No valid clips were created")
+                
+                # Update progress: 60% - combining clips
+                progress_tracker.set_progress(task_id, 60, "Combining video clips...", total_scenes, total_scenes)
+                
+                # Combine video clips
+                logger.info(f"   Combining {len(video_clips)} video clips...")
+                if MOVIEPY_VERSION == 2:
+                    final_video = CompositeVideoClip(video_clips)
+                else:
+                    final_video = mpe.CompositeVideoClip(video_clips)
+                
+                logger.info(f"Combined {len(video_clips)} video scenes")
+                
+                # Update progress: 70% - combining audio
+                progress_tracker.set_progress(task_id, 70, "Combining audio tracks...", total_scenes, total_scenes)
+                
+                # Combine audio
+                if audio_tracks:
+                    logger.info(f"   Processing {len(audio_tracks)} audio tracks...")
+                    for i, track in enumerate(audio_tracks, 1):
+                        start = track.start if hasattr(track, 'start') else 0
+                        dur = track.duration if hasattr(track, 'duration') else 0
+                        end = start + dur if dur else 0
+                        logger.info(f"   Track {i}: start={start:.2f}s, duration={dur:.2f}s, end={end:.2f}s")
                     
-                    # Add background music if provided
-                    if bg_music_data:
-                        try:
-                            music_path = os.path.join(temp_dir, "bg_music.mp3")
-                            with open(music_path, 'wb') as f:
-                                f.write(bg_music_data)
-                            
-                            if MOVIEPY_VERSION == 2:
-                                music = AudioFileClip(music_path)
-                                music = music.with_volume_scaled(bg_music_volume)
-                                music = music.with_duration(final_video.duration)
-                                final_audio = CompositeAudioClip([base_audio, music])
-                            else:
-                                music = mpe.AudioFileClip(music_path).volumex(bg_music_volume)
-                                music = music.set_duration(final_video.duration)
-                                final_audio = mpe.CompositeAudioClip([base_audio, music])
-                            
-                            logger.info("Added background music")
-                        except Exception as e:
-                            logger.warning(f"Could not add background music: {e}")
+                    try:
+                        if MOVIEPY_VERSION == 2:
+                            base_audio = CompositeAudioClip(audio_tracks)
+                            logger.info(f"   Combined audio duration: {base_audio.duration}")
+                        else:
+                            base_audio = mpe.CompositeAudioClip(audio_tracks)
+                            logger.info(f"   Combined audio duration: {base_audio.duration}")
+                        
+                        if bg_music_data:
+                            try:
+                                music_path = os.path.join(temp_dir, "bg_music.mp3")
+                                with open(music_path, 'wb') as f:
+                                    f.write(bg_music_data)
+                                
+                                if MOVIEPY_VERSION == 2:
+                                    music = AudioFileClip(music_path)
+                                    music = music.with_volume_scaled(bg_music_volume)
+                                    music = music.with_duration(final_video.duration)
+                                    final_audio = CompositeAudioClip([base_audio, music])
+                                else:
+                                    music = mpe.AudioFileClip(music_path).volumex(bg_music_volume)
+                                    music = music.set_duration(final_video.duration)
+                                    final_audio = mpe.CompositeAudioClip([base_audio, music])
+                                
+                                logger.info("Added background music")
+                            except Exception as e:
+                                logger.warning(f"Could not add background music: {e}")
+                                final_audio = base_audio
+                        else:
                             final_audio = base_audio
-                    else:
-                        final_audio = base_audio
-                    
-                    # Attach audio to video (matching video_editor.py - no duration adjustment needed)
-                    # CompositeAudioClip handles timing automatically based on with_start() calls
-                    if MOVIEPY_VERSION == 2:
-                        final_video = final_video.with_audio(final_audio)
-                    else:
-                        final_video = final_video.set_audio(final_audio)
-                    
-                    logger.info(f"✅ Audio attached to video (audio: {final_audio.duration:.2f}s, video: {final_video.duration:.2f}s)")
-                except Exception as e:
-                    logger.error(f"Error combining audio: {e}")
-                    import traceback
-                    logger.error(traceback.format_exc())
-                    raise
-            else:
-                logger.warning("No audio tracks found, creating silent video")
-            
-            # Write video to bytes
-            logger.info(f"Writing final video...")
-            safe_title = title.replace('/', '_').replace('\\', '_')
-            output_path = os.path.join(temp_dir, f"{safe_title}.mp4")
-            
-            # Also save to data/videos folder for easy access
-            videos_dir = os.path.join(base_dir, 'data', 'videos')
-            os.makedirs(videos_dir, exist_ok=True)
-            saved_video_path = os.path.join(videos_dir, f"{safe_title}.mp4")
-            
-            final_video.write_videofile(
-                output_path,
-                fps=fps,
-                codec="libx264",
-                audio_codec="aac",
-                threads=4,
-                preset='medium',
-                temp_audiofile=os.path.join(temp_dir, "temp-audio.m4a"),
-                remove_temp=False,  # Keep temp files for debugging
-                logger='bar'
-            )
-            
-            # Copy to videos folder for easy access
-            import shutil
-            try:
-                shutil.copy2(output_path, saved_video_path)
-                logger.info(f"✅ Video saved to: {saved_video_path}")
-            except Exception as e:
-                logger.warning(f"Could not copy video to videos folder: {e}")
-            
-            # Read video file
-            with open(output_path, 'rb') as f:
-                video_data = f.read()
-            
-            # Cleanup - Close all clips to prevent daemon thread issues
-            logger.info("Cleaning up resources...")
-            
-            # Close final video and audio first (this will close nested clips)
-            try:
-                if hasattr(final_video, 'close'):
-                    final_video.close()
-            except Exception as e:
-                logger.debug(f"Error closing final video: {e}")
-            
-            # Close final_audio if it exists separately (before video closes it)
-            try:
-                if 'final_audio' in locals() and final_audio and hasattr(final_audio, 'close'):
-                    final_audio.close()
-            except:
-                pass
-            
-            # Close base_audio if it exists separately
-            try:
-                if 'base_audio' in locals() and base_audio and hasattr(base_audio, 'close'):
-                    base_audio.close()
-            except:
-                pass
-            
-            # Close all individual audio tracks (after composite is closed)
-            for audio_track in audio_tracks:
+                        
+                        if MOVIEPY_VERSION == 2:
+                            final_video = final_video.with_audio(final_audio)
+                        else:
+                            final_video = final_video.set_audio(final_audio)
+                        
+                        logger.info(f"✅ Audio attached to video (audio: {final_audio.duration:.2f}s, video: {final_video.duration:.2f}s)")
+                    except Exception as e:
+                        logger.error(f"Error combining audio: {e}")
+                        import traceback
+                        logger.error(traceback.format_exc())
+                        raise
+                else:
+                    logger.warning("No audio tracks found, creating silent video")
+                
+                # Update progress: 80% - rendering video
+                progress_tracker.set_progress(task_id, 80, "Rendering final video...", total_scenes, total_scenes)
+                
+                logger.info(f"Writing final video...")
+                safe_title = title_sanitized or sanitize_filename(title)
+                output_path = os.path.join(temp_dir, f"{safe_title}.mp4")
+                
+                final_video.write_videofile(
+                    output_path,
+                    fps=fps,
+                    codec="libx264",
+                    audio_codec="aac",
+                    threads=4,
+                    preset='medium',
+                    temp_audiofile=os.path.join(temp_dir, "temp-audio.m4a"),
+                    remove_temp=False,
+                    logger='bar'
+                )
+                
+                # Update progress: 95% - finalizing
+                progress_tracker.set_progress(task_id, 95, "Finalizing video...", total_scenes, total_scenes)
+                
+                # Read video file
+                with open(output_path, 'rb') as f:
+                    video_data = f.read()
+                
+                # Generate subtitles if requested (best-effort, non-blocking on failure)
+                if generate_subtitles:
+                    try:
+                        narrations = subtitle_narrations or self._load_scene_narrations(
+                            title_sanitized, len(images)
+                        )
+                        subtitles_text = self._generate_subtitles_text(timings, narrations) if narrations else None
+                        if subtitles_text:
+                            subtitles_bytes = subtitles_text.encode('utf-8')
+                            subtitles_local_path = os.path.join(temp_dir, f"{safe_title}.srt")
+                            with open(subtitles_local_path, "w", encoding="utf-8") as srt_file:
+                                srt_file.write(subtitles_text)
+                            logger.info(f"✅ Generated subtitles for {safe_title}")
+                        else:
+                            logger.info("No subtitles generated (missing narrations or timings)")
+                    except Exception as e:
+                        logger.warning(f"Failed to generate subtitles: {e}")
+                
+                # Mark as complete
+                progress_tracker.set_progress(task_id, 100, "Video generation complete!", total_scenes, total_scenes)
+                
+                # Cleanup - Close all clips to prevent daemon thread issues
+                logger.info("Cleaning up resources...")
+                
                 try:
-                    if hasattr(audio_track, 'close'):
-                        audio_track.close()
+                    if hasattr(final_video, 'close'):
+                        final_video.close()
                 except Exception as e:
-                    logger.debug(f"Error closing audio track: {e}")
-            
-            # Close all video clips (after composite is closed)
-            for clip in video_clips:
+                    logger.debug(f"Error closing final video: {e}")
+                
                 try:
-                    if hasattr(clip, 'close'):
-                        clip.close()
-                except Exception as e:
-                    logger.debug(f"Error closing video clip: {e}")
-            
-            # Small delay to let threads finish
-            import time
-            time.sleep(0.1)
-            
-            # Cleanup temp directory (keep for debugging, but can be removed)
-            # import shutil
-            # try:
-            #     shutil.rmtree(temp_dir)
-            # except:
-            #     pass
-            
-            logger.info("Video generation complete")
-            return video_data
-            
-        except Exception as e:
-            # Cleanup on error - close all clips
-            logger.error(f"Error building video: {e}")
-            
-            # Close all audio tracks
-            for audio_track in audio_tracks:
-                try:
-                    if hasattr(audio_track, 'close'):
-                        audio_track.close()
+                    if 'final_audio' in locals() and final_audio and hasattr(final_audio, 'close'):
+                        final_audio.close()
                 except:
                     pass
-            
-            # Close all video clips
-            for clip in video_clips:
+                
                 try:
-                    if hasattr(clip, 'close'):
-                        clip.close()
+                    if 'base_audio' in locals() and base_audio and hasattr(base_audio, 'close'):
+                        base_audio.close()
                 except:
                     pass
-            
-            # Close final video if it exists
-            try:
-                if 'final_video' in locals() and hasattr(final_video, 'close'):
-                    final_video.close()
-            except:
-                pass
-            
-            # Cleanup temp directory
-            # import shutil
-            # try:
-            #     shutil.rmtree(temp_dir)
-            # except:
-            #     pass
-            
-            raise Exception(f"❌ Failed to build video: {e}")
+                
+                for audio_track in audio_tracks:
+                    try:
+                        if hasattr(audio_track, 'close'):
+                            audio_track.close()
+                    except Exception as e:
+                        logger.debug(f"Error closing audio track: {e}")
+                
+                for clip in video_clips:
+                    try:
+                        if hasattr(clip, 'close'):
+                            clip.close()
+                    except Exception as e:
+                        logger.debug(f"Error closing video clip: {e}")
+                
+                import time
+                time.sleep(0.1)
+                
+                logger.info("Video generation complete")
+                if return_subtitles:
+                    return {
+                        "video_data": video_data,
+                        "timings": timings,
+                        "subtitles_bytes": subtitles_bytes,
+                        "subtitles_local_path": subtitles_local_path,
+                        "title_sanitized": safe_title
+                    }
+                return video_data
+                
+            except Exception as e:
+                # Cleanup on error - close all clips
+                logger.error(f"Error building video: {e}")
+                
+                for audio_track in audio_tracks:
+                    try:
+                        if hasattr(audio_track, 'close'):
+                            audio_track.close()
+                    except:
+                        pass
+                
+                for clip in video_clips:
+                    try:
+                        if hasattr(clip, 'close'):
+                            clip.close()
+                    except:
+                        pass
+                
+                try:
+                    if 'final_video' in locals() and hasattr(final_video, 'close'):
+                        final_video.close()
+                except:
+                    pass
+                
+                raise Exception(f"❌ Failed to build video: {e}")
 
 
 # Create service instance

@@ -8,6 +8,7 @@ import logging
 import base64
 from flask import Blueprint, request, jsonify
 from services.supabase_service import supabase_service
+from services.project_service import project_service
 
 logger = logging.getLogger("VidyAI_Flask")
 
@@ -272,19 +273,24 @@ def list_projects():
         }
     """
     try:
-        # List files in images bucket root
-        files = supabase_service.list_files('images', '')
-        
-        # Extract unique folder names (projects)
-        projects = set()
-        for file in files:
-            name = file.get('name', '')
-            if '/' in name:
-                project = name.split('/')[0]
-                projects.add(project)
-        
-        projects_list = sorted(list(projects))
-        
+        result = supabase_service.list_files('images', '')
+        if not result.get('success'):
+            return jsonify({
+                'success': False,
+                'error': result.get('error', 'Failed to list projects'),
+                'projects': [],
+                'count': 0
+            }), 500
+
+        files = result.get('files', [])
+        projects = {
+            name.split('/')[0]
+            for name in [f.get('name', '') for f in files]
+            if name and '/' in name
+        }
+
+        projects_list = sorted(projects)
+
         return jsonify({
             'success': True,
             'projects': projects_list,
@@ -296,6 +302,48 @@ def list_projects():
         return jsonify({
             'success': False,
             'error': str(e)
+        }), 500
+
+
+@storage_bp.route('/get-video-count', methods=['GET'])
+def get_video_count():
+    """
+    Get count of video folders (projects) in the video bucket
+    Simple logic: use project service count (each video = one folder/project)
+    
+    Response JSON:
+        {
+            "success": bool,
+            "count": int,
+            "error": str (if failed)
+        }
+    """
+    try:
+        # Use project service which already successfully lists videos from video bucket
+        # Each video project corresponds to one folder in the video bucket
+        result = project_service.list_projects()
+        
+        if result.get('success'):
+            video_count = result.get('count', 0)
+            logger.info(f"Video count from project service: {video_count}")
+            return jsonify({
+                'success': True,
+                'count': video_count
+            }), 200
+        else:
+            logger.error(f"Project service returned error: {result.get('error')}")
+            return jsonify({
+                'success': False,
+                'error': result.get('error', 'Failed to get video count'),
+                'count': 0
+            }), 500
+        
+    except Exception as e:
+        logger.error(f"Error getting video count: {str(e)}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'count': 0
         }), 500
 
 

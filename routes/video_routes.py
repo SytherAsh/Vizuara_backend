@@ -12,6 +12,7 @@ from flask import Blueprint, request, jsonify, send_file
 from io import BytesIO
 from services.video_service import video_service
 from services.supabase_service import supabase_service
+from utils.helpers import sanitize_filename
 
 logger = logging.getLogger("VidyAI_Flask")
 
@@ -92,15 +93,16 @@ def build_video():
         kb_zoom_end = data.get('kb_zoom_end', 1.15)
         kb_pan = data.get('kb_pan', 'auto')
         upload_to_supabase = data.get('upload_to_supabase', False)
-        project_name = data.get('project_name', title.replace(' ', '_'))
+        title_sanitized = sanitize_filename(data.get('project_name', title))
+        generate_subtitles = data.get('generate_subtitles', upload_to_supabase)
         
         # Decode background music if provided
         bg_music_data = None
         if 'bg_music' in data and data['bg_music']:
             bg_music_data = base64.b64decode(data['bg_music'])
         
-        # Build video with all customization options
-        video_data = video_service.build_video(
+        # Build video with all customization options and optional subtitles
+        video_result = video_service.build_video(
             images=images,
             scene_audio=scene_audio,
             title=title,
@@ -115,33 +117,69 @@ def build_video():
             ken_burns=ken_burns,
             kb_zoom_start=kb_zoom_start,
             kb_zoom_end=kb_zoom_end,
-            kb_pan=kb_pan
+            kb_pan=kb_pan,
+            title_sanitized=title_sanitized,
+            generate_subtitles=generate_subtitles,
+            return_subtitles=True
         )
-        
+
+        if isinstance(video_result, dict):
+            video_data = video_result.get('video_data')
+            subtitles_bytes = video_result.get('subtitles_bytes')
+            timings = video_result.get('timings')
+        else:
+            video_data = video_result
+            subtitles_bytes = None
+            timings = None
+
         # Convert to base64
-        video_base64 = base64.b64encode(video_data).decode('utf-8')
+        video_base64 = base64.b64encode(video_data).decode('utf-8') if video_data else None
+        subtitles_base64 = base64.b64encode(subtitles_bytes).decode('utf-8') if subtitles_bytes else None
         
         response = {
             'success': True,
-            'video': video_base64
+            'video': video_base64,
+            'title_sanitized': title_sanitized,
+            'timings': timings
         }
+        if subtitles_base64:
+            response['subtitles'] = subtitles_base64
         
         # Upload to Supabase if requested
-        if upload_to_supabase:
-            path = f"{project_name}/{title.replace(' ', '_')}.mp4"
-            result = supabase_service.upload_file('video', path, video_data, 'video/mp4')
+        if upload_to_supabase and video_data:
+            video_path = f"{title_sanitized}/{title_sanitized}.mp4"
+            result = supabase_service.upload_file('video', video_path, video_data, 'video/mp4')
             if result['success']:
+                response['video_path'] = video_path
                 response['supabase_url'] = result['public_url']
-            
+
+            # Upload subtitles to video bucket alongside MP4
+            subtitles_url = None
+            subtitles_path = None
+            if subtitles_bytes:
+                subtitles_path = f"{title_sanitized}/{title_sanitized}.srt"
+                sub_result = supabase_service.upload_file(
+                    'video',
+                    subtitles_path,
+                    subtitles_bytes,
+                    'text/plain'
+                )
+                if sub_result.get('success'):
+                    subtitles_url = sub_result.get('public_url')
+                response['subtitles_path'] = subtitles_path
+                response['subtitles_url'] = subtitles_url
+
             # Store metadata if provided
             if 'storyline' in data or 'scene_prompts' in data:
                 try:
                     metadata = {
                         'title': title,
-                        'project_name': project_name,
+                        'project_name': title_sanitized,
                         'created_at': datetime.now().isoformat(),
-                        'video_path': path,
+                        'video_path': video_path,
                         'video_url': result.get('public_url', '') if result.get('success') else '',
+                        'subtitles_path': subtitles_path,
+                        'subtitles_url': subtitles_url,
                         'fps': fps,
                         'resolution': list(resolution),
                         'num_scenes': len(images)
@@ -157,7 +195,7 @@ def build_video():
                         metadata['wikiTitle'] = data['wikiTitle']
                     
                     metadata_json = json.dumps(metadata, indent=2)
-                    metadata_path = f"{project_name}/metadata.json"
+                    metadata_path = f"{title_sanitized}/metadata.json"
                     metadata_result = supabase_service.upload_file(
                         'metadata', 
                         metadata_path, 
@@ -165,7 +203,7 @@ def build_video():
                         'application/json'
                     )
                     if metadata_result['success']:
-                        logger.info(f"Metadata stored for project: {project_name}")
+                        logger.info(f"Metadata stored for project: {title_sanitized}")
                 except Exception as e:
                     logger.warning(f"Failed to store metadata: {e}")
             
@@ -173,7 +211,7 @@ def build_video():
             try:
                 if 'storyline' in data and data['storyline']:
                     storyline_text = f"# {title} - Comic Storyline\n\n{data['storyline']}"
-                    storyline_path = f"{project_name}/storyline.txt"
+                    storyline_path = f"{title_sanitized}/storyline.txt"
                     storyline_result = supabase_service.upload_file(
                         'text',
                         storyline_path,
@@ -181,13 +219,13 @@ def build_video():
                         'text/plain'
                     )
                     if storyline_result['success']:
-                        logger.info(f"Storyline text stored for project: {project_name}")
+                        logger.info(f"Storyline text stored for project: {title_sanitized}")
                 
                 if 'scene_prompts' in data and data['scene_prompts']:
                     scene_prompts_text = f"# {title} - Scene Prompts\n\n"
                     for i, prompt in enumerate(data['scene_prompts'], 1):
                         scene_prompts_text += f"## Scene {i}\n{prompt}\n\n{'='*50}\n\n"
-                    scene_prompts_path = f"{project_name}/scene_prompts.txt"
+                    scene_prompts_path = f"{title_sanitized}/scene_prompts.txt"
                     scene_prompts_result = supabase_service.upload_file(
                         'text',
                         scene_prompts_path,
@@ -195,7 +233,7 @@ def build_video():
                         'text/plain'
                     )
                     if scene_prompts_result['success']:
-                        logger.info(f"Scene prompts text stored for project: {project_name}")
+                        logger.info(f"Scene prompts text stored for project: {title_sanitized}")
             except Exception as e:
                 logger.warning(f"Failed to store text files: {e}")
         
@@ -244,51 +282,165 @@ def build_from_supabase():
         project_name = data['project_name']
         title = data['title']
         num_scenes = data['num_scenes']
+        title_sanitized = sanitize_filename(project_name or title)
         
         # Download images from Supabase
         images = []
         for i in range(1, num_scenes + 1):
-            path = f"{project_name}/scene_{i}.jpg"
-            img_data = supabase_service.download_file('images', path)
-            images.append(img_data)
+            path = f"{title_sanitized}/scene_{i}.jpg"
+            img_result = supabase_service.download_file('images', path)
+            images.append(img_result.get('file_data') if img_result.get('success') else None)
         
         # Download audio from Supabase
         scene_audio = {}
         for i in range(1, num_scenes + 1):
             scene_key = f"scene_{i}"
-            path = f"{project_name}/scene_{i}.mp3"
-            audio_data = supabase_service.download_file('audio', path)
-            if audio_data:
-                scene_audio[scene_key] = audio_data
+            path = f"{title_sanitized}/scene_{i}.mp3"
+            audio_result = supabase_service.download_file('audio', path)
+            if audio_result.get('success') and audio_result.get('file_data'):
+                scene_audio[scene_key] = audio_result['file_data']
         
         # Build video with downloaded assets
         fps = data.get('fps', 30)
         resolution = tuple(data.get('resolution', [1920, 1080]))
-        
-        video_data = video_service.build_video(
+        video_result = video_service.build_video(
             images=images,
             scene_audio=scene_audio,
             title=title,
             fps=fps,
-            resolution=resolution
+            resolution=resolution,
+            title_sanitized=title_sanitized,
+            generate_subtitles=True,
+            return_subtitles=True
         )
+
+        if isinstance(video_result, dict):
+            video_data = video_result.get('video_data')
+            subtitles_bytes = video_result.get('subtitles_bytes')
+            timings = video_result.get('timings')
+        else:
+            video_data = video_result
+            subtitles_bytes = None
+            timings = None
         
         # Upload to Supabase
-        path = f"{project_name}/{title.replace(' ', '_')}.mp4"
-        result = supabase_service.upload_file('video', path, video_data, 'video/mp4')
+        video_path = f"{title_sanitized}/{title_sanitized}.mp4"
+        result = supabase_service.upload_file('video', video_path, video_data, 'video/mp4')
+
+        subtitles_url = None
+        subtitles_path = None
+        if subtitles_bytes:
+            subtitles_path = f"{title_sanitized}/{title_sanitized}.srt"
+            sub_result = supabase_service.upload_file(
+                'video',
+                subtitles_path,
+                subtitles_bytes,
+                'text/plain'
+            )
+            if sub_result.get('success'):
+                subtitles_url = sub_result.get('public_url')
         
         response = {
             'success': True,
-            'video': base64.b64encode(video_data).decode('utf-8')
+            'video': base64.b64encode(video_data).decode('utf-8') if video_data else None,
+            'supabase_url': result.get('public_url') if result.get('success') else None,
+            'video_path': video_path,
+            'subtitles_path': subtitles_path,
+            'subtitles_url': subtitles_url,
+            'timings': timings
         }
-        
-        if result['success']:
-            response['supabase_url'] = result['public_url']
         
         return jsonify(response), 200
         
     except Exception as e:
         logger.error(f"Error in build_from_supabase: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@video_bp.route('/subtitles-url', methods=['POST'])
+def get_subtitles_url():
+    """
+    Get public URL for subtitles SRT stored alongside the video.
+    Request JSON:
+        {
+            "title": str,
+            "project_name": str (optional, defaults to title)
+        }
+    """
+    try:
+        data = request.get_json()
+        if not data or 'title' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'title is required'
+            }), 400
+
+        title = data['title']
+        title_sanitized = sanitize_filename(data.get('project_name', title))
+        subtitles_path = f"{title_sanitized}/{title_sanitized}.srt"
+        subtitles_url = supabase_service.get_public_url('video', subtitles_path)
+
+        if not subtitles_url:
+            return jsonify({
+                'success': False,
+                'error': 'Subtitles not found',
+                'subtitles_path': subtitles_path
+            }), 404
+
+        return jsonify({
+            'success': True,
+            'subtitles_url': subtitles_url,
+            'subtitles_path': subtitles_path
+        }), 200
+    except Exception as e:
+        logger.error(f"Error fetching subtitles URL: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+
+@video_bp.route('/subtitles/download', methods=['POST'])
+def download_subtitles():
+    """
+    Download subtitles SRT file and stream it to the client.
+    Request JSON:
+        {
+            "title": str,
+            "project_name": str (optional)
+        }
+    """
+    try:
+        data = request.get_json()
+        if not data or 'title' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'title is required'
+            }), 400
+
+        title = data['title']
+        title_sanitized = sanitize_filename(data.get('project_name', title))
+        subtitles_path = f"{title_sanitized}/{title_sanitized}.srt"
+
+        result = supabase_service.download_file('video', subtitles_path)
+        if not result.get('success') or not result.get('file_data'):
+            return jsonify({
+                'success': False,
+                'error': 'Subtitles not found',
+                'subtitles_path': subtitles_path
+            }), 404
+
+        return send_file(
+            BytesIO(result['file_data']),
+            mimetype='text/plain; charset=utf-8',
+            as_attachment=True,
+            download_name=f"{title_sanitized}.srt"
+        )
+    except Exception as e:
+        logger.error(f"Error downloading subtitles: {str(e)}")
         return jsonify({
             'success': False,
             'error': str(e)

@@ -9,6 +9,7 @@ import base64
 from flask import Blueprint, request, jsonify
 from services.tts_service import tts_service
 from services.supabase_service import supabase_service
+from utils.helpers import sanitize_filename
 
 logger = logging.getLogger("VidyAI_Flask")
 
@@ -119,7 +120,7 @@ def generate_all():
         slow = data.get('slow', False)
         speed = data.get('speed', 1.25)
         upload_to_supabase = data.get('upload_to_supabase', False)
-        project_name = data.get('project_name', 'project')
+        project_name = sanitize_filename(data.get('project_name', 'project'))
         
         # Generate all audio
         scene_to_audio = tts_service.generate_scene_audios(

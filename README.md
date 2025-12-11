@@ -160,6 +160,14 @@ curl -X POST http://localhost:5000/api/story/generate-complete \
 - Public buckets for images, audio, video, metadata, text
 - Direct URL access to files
 
+#### Bucket Map (per project/title_sanitized)
+- `images/{title_sanitized}/scene_{i}.jpg`
+- `audio/{title_sanitized}/scene_{i}.mp3`
+- `text/{title_sanitized}/scene_{i}_narration.txt`
+- `video/{title_sanitized}/{title_sanitized}.mp4`
+- `video/{title_sanitized}/{title_sanitized}.srt`
+- `metadata/{title_sanitized}/metadata.json`
+
 ### ✅ AI-Powered Generation
 - Groq API for storyline and narration (Llama 3.3 70B)
 - Gemini 2.5 Flash Image for comic panel generation

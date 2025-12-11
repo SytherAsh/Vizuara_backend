@@ -129,8 +129,22 @@ class ProjectService:
             projects = []
             bucket_name = self.supabase.buckets.get('video', 'video')
             
-            def find_videos_recursive(path=""):
-                """Recursively search for videos"""
+            # Validate bucket name
+            if not bucket_name:
+                logger.error("Video bucket name not found")
+                return {
+                    'success': False,
+                    'error': 'Video bucket not configured',
+                    'projects': [],
+                    'count': 0
+                }
+            
+            def find_videos_recursive(path="", depth=0, max_depth=10):
+                """Recursively search for videos with depth limit to prevent infinite loops"""
+                if depth > max_depth:
+                    logger.warning(f"Max depth {max_depth} reached at path: {path}")
+                    return
+                    
                 try:
                     items = self.supabase.client.storage.from_(bucket_name).list(path=path)
                     
@@ -154,7 +168,7 @@ class ProjectService:
                         if is_folder:
                             # It's a folder - recurse into it
                             logger.debug(f"Found folder: {full_path}, recursing...")
-                            find_videos_recursive(full_path)
+                            find_videos_recursive(full_path, depth=depth + 1, max_depth=max_depth)
                         else:
                             # It's a file - check if it's a video
                             if name and name.lower().endswith(('.mp4', '.avi', '.mov', '.webm', '.mkv')):

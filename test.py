@@ -33,7 +33,6 @@ import os
 import sys
 import logging
 from typing import Dict, List, Any
-from pathlib import Path
 from dotenv import load_dotenv
 
 # Add parent directory to path for imports
@@ -53,16 +52,20 @@ logger = logging.getLogger("test_video_generation")
 from services.narration_service import NarrationService
 from services.tts_service import TTSService
 from services.video_service import VideoService
+from services.supabase_service import supabase_service
+from utils.helpers import sanitize_filename
 
 # Test configuration
-TEST_TITLE = "Test Video"
-TEST_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-TEST_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "data", "test_output")
-os.makedirs(TEST_OUTPUT_DIR, exist_ok=True)
+TEST_TITLE = "Chhatrapati Shivaji Maharaj"
+PROJECT_NAME = sanitize_filename(os.getenv("TEST_PROJECT_NAME", TEST_TITLE))
+TEST_DATA_DIR = os.path.join(os.path.dirname(__file__), "data/Test")
 
 # Video duration control (set to None for no limit, or specify max seconds)
-# Example: MAX_VIDEO_DURATION = 60.0  # 60 seconds max
-MAX_VIDEO_DURATION = 60  # Change this to limit video duration (e.g., 60.0 for 60 seconds)
+MAX_VIDEO_DURATION = 30  # target ~30 second video
+# Toggle whether to upload generated assets to Supabase instead of writing locally
+UPLOAD_TO_SUPABASE = True
+# Toggle to pull source images from Supabase (images bucket) instead of local data folder
+USE_SUPABASE_IMAGES = True
 
 # Mock storyline and scene prompts (you can replace these with real data)
 MOCK_STORYLINE = """
@@ -71,37 +74,60 @@ Along the way, they face challenges, meet allies, and overcome obstacles to achi
 """
 
 MOCK_SCENE_PROMPTS = [
-    "Scene 1: The hero stands in a grand palace, looking determined. The setting is majestic with golden decorations.",
-    "Scene 2: The hero begins their journey, walking through a beautiful forest with sunlight filtering through trees.",
-    "Scene 3: The hero encounters a challenge - a large obstacle blocking their path. They look determined to overcome it.",
-    "Scene 4: The hero meets an ally who offers help. They shake hands in a friendly forest clearing.",
-    "Scene 5: The hero reaches their destination - a beautiful kingdom. They stand victorious with arms raised."
+    "Scene 1: Young Shivaji surveys the Sahyadri hill forts at dawn, Maratha warriors by his side as saffron flags flutter.",
+    "Scene 2: Shivaji rides into a bustling fort courtyard, greeted by soldiers and citizens, the royal seal being presented."
 ]
 
 
-def load_images() -> List[bytes]:
-    """Load images from data folder"""
-    logger.info("=" * 60)
-    logger.info("STEP 1: Loading Images")
-    logger.info("=" * 60)
-    
-    images = []
+def _load_images_from_supabase(project_name: str) -> List[bytes]:
+    """Load scene images from Supabase images bucket."""
+    bucket = 'images'
+    # List files under project prefix
+    list_result = supabase_service.list_files(bucket, project_name)
+    if not list_result.get("success"):
+        raise FileNotFoundError(f"Unable to list images in Supabase for {project_name}: {list_result.get('error')}")
+    files = list_result.get("files", [])
+    scene_files = sorted([f["name"] for f in files if f and f.get("name", "").startswith(f"{project_name}/scene_")])
+    if not scene_files:
+        raise FileNotFoundError(f"No scene images found in Supabase under {project_name}")
+    images: List[bytes] = []
+    for path in scene_files:
+        dl = supabase_service.download_file(bucket, path)
+        if not dl.get("success") or not dl.get("file_data"):
+            raise FileNotFoundError(f"Failed to download {path} from Supabase")
+        images.append(dl["file_data"])
+        logger.info(f"  ✓ Loaded {path} ({len(dl['file_data'])} bytes)")
+    logger.info(f"✅ Loaded {len(images)} images from Supabase")
+    return images
+
+
+def _load_images_from_local() -> List[bytes]:
+    """Load images from local data folder (fallback)."""
     image_files = sorted([f for f in os.listdir(TEST_DATA_DIR) if f.startswith("scene_") and f.endswith(".jpg")])
-    
     if not image_files:
         raise FileNotFoundError(f"No scene images found in {TEST_DATA_DIR}")
-    
-    logger.info(f"Found {len(image_files)} image files")
-    
+    images: List[bytes] = []
     for img_file in image_files:
         img_path = os.path.join(TEST_DATA_DIR, img_file)
         with open(img_path, 'rb') as f:
-            img_data = f.read()
-            images.append(img_data)
-            logger.info(f"  ✓ Loaded {img_file} ({len(img_data)} bytes)")
-    
-    logger.info(f"✅ Successfully loaded {len(images)} images")
+            data = f.read()
+            images.append(data)
+            logger.info(f"  ✓ Loaded {img_file} ({len(data)} bytes)")
+    logger.info(f"✅ Loaded {len(images)} images from local folder")
     return images
+
+
+def load_images() -> List[bytes]:
+    """Load images from Supabase (preferred) or local fallback."""
+    logger.info("=" * 60)
+    logger.info("STEP 1: Loading Images")
+    logger.info("=" * 60)
+    if USE_SUPABASE_IMAGES:
+        try:
+            return _load_images_from_supabase(PROJECT_NAME)
+        except Exception as e:
+            logger.warning(f"Supabase image load failed ({e}); falling back to local data folder")
+    return _load_images_from_local()
 
 
 def generate_narrations(images: List[bytes], use_mock: bool = False) -> Dict[str, Any]:
@@ -192,7 +218,7 @@ def generate_audio(narrations: Dict[str, Any]) -> Dict[str, bytes]:
     logger.info("=" * 60)
     
     tts_service = TTSService()
-    scene_audio = {}
+    scene_audio: Dict[str, bytes] = {}
     
     narrs = narrations.get("narrations", {})
     
@@ -216,14 +242,8 @@ def generate_audio(narrations: Dict[str, Any]) -> Dict[str, bytes]:
             
             scene_audio[scene_key] = audio_data
             
-            # Save audio file for debugging
-            audio_path = os.path.join(TEST_OUTPUT_DIR, f"{scene_key}.mp3")
-            with open(audio_path, 'wb') as f:
-                f.write(audio_data)
-            
             duration = tts_service.estimate_tts_duration_seconds(narration_text, speed=1.25)
             logger.info(f"  ✓ Generated audio for scene {scene_num} (~{duration:.1f}s, {len(audio_data)} bytes)")
-            logger.info(f"    Saved to: {audio_path}")
             
         except Exception as e:
             logger.error(f"  ✗ Error generating audio for scene {scene_num}: {e}")
@@ -246,7 +266,7 @@ def build_video(images: List[bytes], scene_audio: Dict[str, bytes]) -> bytes:
     try:
         logger.info(f"Building video with {len(images)} scenes and {len(scene_audio)} audio tracks...")
         
-        video_data = video_service.build_video(
+        video_result = video_service.build_video(
             images=images,
             scene_audio=scene_audio,
             title=TEST_TITLE,
@@ -262,18 +282,50 @@ def build_video(images: List[bytes], scene_audio: Dict[str, bytes]) -> bytes:
             kb_zoom_start=1.05,
             kb_zoom_end=1.15,
             kb_pan="auto",
-            max_video_duration=MAX_VIDEO_DURATION  # Limit video duration if set
+            max_video_duration=MAX_VIDEO_DURATION,
+            title_sanitized=PROJECT_NAME,
+            generate_subtitles=True,
+            return_subtitles=True,
+            subtitle_narrations=[scene_audio.get(f"scene_{i}", b"") and "" for i in range(1, len(images) + 1)]
         )
-        
-        # Save video file
-        video_path = os.path.join(TEST_OUTPUT_DIR, f"{TEST_TITLE}.mp4")
-        with open(video_path, 'wb') as f:
-            f.write(video_data)
-        
-        logger.info(f"✅ Video generated successfully!")
-        logger.info(f"   Output: {video_path}")
-        logger.info(f"   Size: {len(video_data) / (1024*1024):.2f} MB")
-        
+
+        if isinstance(video_result, dict):
+            video_data = video_result.get("video_data")
+            subtitles_bytes = video_result.get("subtitles_bytes")
+            timings = video_result.get("timings")
+        else:
+            video_data = video_result
+            subtitles_bytes = None
+            timings = None
+
+        if not video_data:
+            raise RuntimeError("Video generation returned empty data")
+
+        logger.info(f"✅ Video generated successfully! Size: {len(video_data) / (1024*1024):.2f} MB")
+
+        upload_info = {}
+        if UPLOAD_TO_SUPABASE:
+            video_path = f"{PROJECT_NAME}/{PROJECT_NAME}.mp4"
+            up_video = supabase_service.upload_file('video', video_path, video_data, 'video/mp4')
+            upload_info["video_path"] = video_path
+            upload_info["video_url"] = up_video.get("public_url")
+            logger.info(f"Uploaded video to Supabase: {upload_info['video_url']}")
+
+            if subtitles_bytes:
+                sub_path = f"{PROJECT_NAME}/{PROJECT_NAME}.srt"
+                up_sub = supabase_service.upload_file('video', sub_path, subtitles_bytes, 'text/plain')
+                upload_info["subtitles_path"] = sub_path
+                upload_info["subtitles_url"] = up_sub.get("public_url")
+                logger.info(f"Uploaded subtitles to Supabase: {upload_info.get('subtitles_url')}")
+
+            if timings is not None:
+                import json
+                timings_bytes = json.dumps(timings, indent=2).encode("utf-8")
+                time_path = f"{PROJECT_NAME}/{PROJECT_NAME}_timings.json"
+                up_time = supabase_service.upload_file('metadata', time_path, timings_bytes, 'application/json')
+                upload_info["timings_path"] = time_path
+                upload_info["timings_url"] = up_time.get("public_url")
+
         return video_data
         
     except Exception as e:
@@ -289,8 +341,9 @@ def main():
     logger.info("VIDEO GENERATION PIPELINE TEST")
     logger.info("=" * 60)
     logger.info(f"Title: {TEST_TITLE}")
-    logger.info(f"Data directory: {TEST_DATA_DIR}")
-    logger.info(f"Output directory: {TEST_OUTPUT_DIR}")
+    logger.info(f"Project name (Supabase prefix): {PROJECT_NAME}")
+    logger.info(f"Source images: {'Supabase' if USE_SUPABASE_IMAGES else 'local data folder'}")
+    logger.info(f"Upload outputs to Supabase: {UPLOAD_TO_SUPABASE}")
     if MAX_VIDEO_DURATION:
         logger.info(f"Maximum video duration: {MAX_VIDEO_DURATION:.1f} seconds")
     else:
@@ -298,28 +351,22 @@ def main():
     logger.info("")
     
     try:
-        # Step 1: Load images
         images = load_images()
         logger.info("")
         
-        # Step 2: Generate narrations
         narrations = generate_narrations(images, use_mock=False)
         logger.info("")
         
-        # Step 3: Generate audio
         scene_audio = generate_audio(narrations)
         logger.info("")
         
-        # Validate that we have audio for all scenes
         if len(scene_audio) < len(images):
             logger.warning(f"⚠️  Warning: Only {len(scene_audio)} audio files generated for {len(images)} images")
             logger.warning("   Video will be created with available audio only")
         
-        # Step 4: Build video
         video_data = build_video(images, scene_audio)
         logger.info("")
         
-        # Summary
         logger.info("=" * 60)
         logger.info("✅ ALL STEPS COMPLETED SUCCESSFULLY!")
         logger.info("=" * 60)
@@ -327,11 +374,6 @@ def main():
         logger.info(f"Narrations generated: {len(narrations.get('narrations', {}))}")
         logger.info(f"Audio files generated: {len(scene_audio)}")
         logger.info(f"Video size: {len(video_data) / (1024*1024):.2f} MB")
-        logger.info(f"Output directory: {TEST_OUTPUT_DIR}")
-        logger.info("")
-        logger.info("Check the output directory for:")
-        logger.info("  - Individual audio files (scene_1.mp3, scene_2.mp3, etc.)")
-        logger.info("  - Final video file (Test Video.mp4)")
         
     except Exception as e:
         logger.error("=" * 60)

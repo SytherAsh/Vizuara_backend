@@ -12,7 +12,7 @@ logger = logging.getLogger("VidyAI_Flask")
 project_bp = Blueprint('projects', __name__, url_prefix='/api/projects')
 
 
-@project_bp.route('', methods=['GET'])
+@project_bp.route('', methods=['GET', 'OPTIONS'])
 def list_projects():
     """
     List all projects (videos from video bucket)
@@ -28,6 +28,25 @@ def list_projects():
             "count": 6
         }
     """
+    # Handle OPTIONS preflight request
+    if request.method == 'OPTIONS':
+        from flask import current_app
+        response = jsonify({})
+        origin = request.headers.get('Origin')
+        # Normalize origin by removing trailing slash for comparison
+        origin_normalized = origin.rstrip('/') if origin else None
+        cors_origins = current_app.config.get('CORS_ORIGINS', [])
+        logger.info(f"Projects OPTIONS - Origin: {origin}, Normalized: {origin_normalized}, Allowed: {cors_origins}")
+        
+        if origin_normalized and origin_normalized in cors_origins:
+            response.headers.add('Access-Control-Allow-Origin', origin)
+            response.headers.add('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD')
+            response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin')
+            response.headers.add('Access-Control-Allow-Credentials', 'true')
+            response.headers.add('Access-Control-Max-Age', '3600')
+            logger.info(f"Projects OPTIONS response with CORS headers for origin: {origin}")
+        return response, 200
+    
     try:
         result = project_service.list_projects()
         return jsonify(result), 200 if result.get('success') else 500

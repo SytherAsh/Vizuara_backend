@@ -1,0 +1,26 @@
+1
+00:00:00,000 --> 00:00:11,410
+<font size='28' face='Arial' color='#FFFFFF' outline='2' outline-color='#000000'>Narendra Modi is a happy boy playing in the streets of Vadnagar. He's laughing and chasing</font>
+<font size='28' face='Arial' color='#FFFFFF' outline='2' outline-color='#000000'>friends on a sunny day. This is where his big journey starts.</font>
+
+2
+00:00:11,410 --> 00:00:27,020
+<font size='28' face='Arial' color='#FFFFFF' outline='2' outline-color='#000000'>Narendra Modi joins the RSS, a big step in his life. He's serious and determined,</font>
+<font size='28' face='Arial' color='#FFFFFF' outline='2' outline-color='#000000'>surrounded by other members. This moment matters, it's the start of his journey in</font>
+<font size='28' face='Arial' color='#FFFFFF' outline='2' outline-color='#000000'>politics and activism.</font>
+
+3
+00:00:26,720 --> 00:00:39,860
+<font size='28' face='Arial' color='#FFFFFF' outline='2' outline-color='#000000'>Narendra Modi helps people after a big earthquake hits Gujarat. He's working hard to save</font>
+<font size='28' face='Arial' color='#FFFFFF' outline='2' outline-color='#000000'>lives and make things better. This is a big test for him, and he's showing he cares.</font>
+
+4
+00:00:39,560 --> 00:00:52,440
+<font size='28' face='Arial' color='#FFFFFF' outline='2' outline-color='#000000'>Narendra Modi is leading a big campaign for the 2014 election. He's speaking to a huge</font>
+<font size='28' face='Arial' color='#FFFFFF' outline='2' outline-color='#000000'>crowd, and they're very excited. This is a big moment for him and India.</font>
+
+5
+00:00:52,140 --> 00:01:06,100
+<font size='28' face='Arial' color='#FFFFFF' outline='2' outline-color='#000000'>Narendra Modi is taking the oath as India's Prime Minister. He's surrounded by important</font>
+<font size='28' face='Arial' color='#FFFFFF' outline='2' outline-color='#000000'>people and supporters. They're all very proud of him. This is a big moment for India and a</font>
+<font size='28' face='Arial' color='#FFFFFF' outline='2' outline-color='#000000'>new beginning.</font>

@@ -7,6 +7,8 @@ import os
 import logging
 from flask import Blueprint, request, jsonify
 from services.narration_service import NarrationService
+from services.supabase_service import supabase_service
+from utils.helpers import sanitize_filename
 
 logger = logging.getLogger("VidyAI_Flask")
 
@@ -65,6 +67,8 @@ def generate_scene():
         target_seconds = data.get('target_seconds', 20)
         min_words = data.get('min_words', 40)
         max_words = data.get('max_words', 70)
+        upload_to_supabase = data.get('upload_to_supabase', False)
+        project_name = sanitize_filename(data.get('project_name', title))
         
         # Get narration service
         narration_service = get_narration_service()
@@ -75,12 +79,28 @@ def generate_scene():
             narration_style, voice_tone, target_seconds,
             min_words, max_words
         )
-        
-        return jsonify({
+
+        response = {
             'success': True,
             'narration': narration,
             'scene_number': scene_number
-        }), 200
+        }
+
+        if upload_to_supabase and narration:
+            try:
+                path = f"{project_name}/scene_{scene_number}_narration.txt"
+                upload_result = supabase_service.upload_file(
+                    'text',
+                    path,
+                    narration.encode('utf-8'),
+                    'text/plain'
+                )
+                response['subtitles_path'] = path
+                response['subtitles_url'] = upload_result.get('public_url')
+            except Exception as e:
+                logger.warning(f"Failed to upload narration text for scene {scene_number}: {e}")
+        
+        return jsonify(response), 200
         
     except Exception as e:
         logger.error(f"Error in generate_scene: {str(e)}")
@@ -142,6 +162,8 @@ def generate_all():
         pace_variation = data.get('pace_variation', 'varied')
         pause_style = data.get('pause_style', 'natural')
         pronunciation_style = data.get('pronunciation_style', 'clear')
+        upload_to_supabase = data.get('upload_to_supabase', False)
+        project_name = sanitize_filename(data.get('project_name', title))
         
         # Get narration service
         narration_service = get_narration_service()
@@ -162,12 +184,39 @@ def generate_all():
             pause_style=pause_style,
             pronunciation_style=pronunciation_style
         )
-        
-        return jsonify({
+
+        response = {
             'success': True,
             'narrations': result,
-            'count': result.get('total_scenes', 0)
-        }), 200
+            'count': result.get('total_scenes', 0),
+            'title_sanitized': project_name
+        }
+
+        if upload_to_supabase:
+            uploaded_paths = {}
+            narrs = result.get('narrations', {})
+            for scene_key, scene_data in narrs.items():
+                scene_num = scene_data.get('scene_number')
+                narration_text = (scene_data.get('narration') or "").strip()
+                if not narration_text:
+                    continue
+                path = f"{project_name}/scene_{scene_num}_narration.txt"
+                try:
+                    upload_result = supabase_service.upload_file(
+                        'text',
+                        path,
+                        narration_text.encode('utf-8'),
+                        'text/plain'
+                    )
+                    uploaded_paths[scene_key] = {
+                        'path': path,
+                        'public_url': upload_result.get('public_url')
+                    }
+                except Exception as e:
+                    logger.warning(f"Failed to upload narration text for scene {scene_num}: {e}")
+            response['subtitles_paths'] = uploaded_paths
+        
+        return jsonify(response), 200
         
     except Exception as e:
         logger.error(f"Error in generate_all: {str(e)}")

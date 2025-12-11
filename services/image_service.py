@@ -327,10 +327,26 @@ Quality standards:
             return []
         
         images = []
+        total_scenes = len(scene_prompts)
+        
+        # Import progress tracker
+        from services.progress_service import progress_tracker
+        task_id = f"images_{comic_title.replace(' ', '_')}"
+        
         for i, prompt in enumerate(scene_prompts):
             scene_num = i + 1
             
-            logger.info(f"Processing scene {scene_num}/{len(scene_prompts)}")
+            # Calculate and update progress
+            progress_percent = int((i / total_scenes) * 100)
+            progress_tracker.set_progress(
+                task_id,
+                progress_percent,
+                f"Generating image {scene_num} of {total_scenes}",
+                scene_num,
+                total_scenes
+            )
+            
+            logger.info(f"Processing scene {scene_num}/{total_scenes} ({progress_percent}%)")
             image_data = self.generate_comic_image(
                 scene_prompt=prompt,
                 scene_num=scene_num,
@@ -345,9 +361,21 @@ Quality standards:
             
             images.append(image_data)
             
-            if scene_num < len(scene_prompts):
+            # Update progress after completion
+            progress_percent = int(((i + 1) / total_scenes) * 100)
+            progress_tracker.set_progress(
+                task_id,
+                progress_percent,
+                f"Completed image {scene_num} of {total_scenes}",
+                scene_num,
+                total_scenes
+            )
+            
+            if scene_num < total_scenes:
                 time.sleep(1)
         
+        # Mark as complete
+        progress_tracker.set_progress(task_id, 100, "All images generated", total_scenes, total_scenes)
         logger.info(f"Comic strip done: {len([img for img in images if img])} images generated.")
         return images
 
