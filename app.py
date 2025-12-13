@@ -219,8 +219,9 @@ def request_entity_too_large(error):
 
 if __name__ == '__main__':
     # Get configuration from environment
+    # Most hosting platforms (Render, Railway, Fly.io) use PORT env variable
     host = os.getenv('FLASK_HOST', '0.0.0.0')
-    port = int(os.getenv('FLASK_PORT', 5000))
+    port = int(os.getenv('PORT', os.getenv('FLASK_PORT', 5000)))
     debug = os.getenv('FLASK_ENV', 'development') == 'development'
     
     logger.info(f"Starting VidyAI Flask Backend on {host}:{port}")

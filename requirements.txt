@@ -17,5 +17,6 @@ numpy
 pydub
 soundfile
 ffmpeg-python
+gunicorn>=21.2.0
 
 
